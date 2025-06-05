@@ -94,3 +94,22 @@ maybe useful:
 • Kurento Media Server
 • Ion-SFU
 • Galene
+
+
+
+maybe existing solutions
+
+https://docs.livekit.io/agents/start/voice-ai/
+https://github.com/livekit-examples/python-agents-examples/blob/main/realtime/openai-realtime.py
+ - will require lots of effort to build even using this
+
+
+https://www.twilio.com/en-us/blog/live-translation-contact-center-openai-realtime-api
+
+
+
+
+
+
+
+
