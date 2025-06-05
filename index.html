@@ -82,8 +82,8 @@ start.onclick = async () => {
       prefixSent = true;
 
       const prefix = (to === "en")
-        ? "Translate everything the user says to English and reply only with the translation."
-        : "将用户说的每句话翻译成中文，并且仅回复翻译后的内容。";
+        ? "To English: "
+        : "To Chinese: ";
 
       log("DC ⇢ setting translation prefix:", prefix);
 
@@ -91,7 +91,7 @@ start.onclick = async () => {
         type: "conversation.item.create",
         item: {
           type: "message",
-          role: "system",
+          role: "user", // role: "system",
           content: [
             {
               type : "input_text",
