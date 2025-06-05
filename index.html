@@ -1,4 +1,6 @@
-<!doctype html><meta charset="utf-8">
+<!doctype html>
+<meta charset="utf-8">
+
 <select id=role>
   <option value=en selected>Alice (speaks English)</option>
   <option value=zh>Bob    (speaks 中文)</option>
@@ -6,39 +8,39 @@
 <button id=start>start</button>
 
 <script type=module>
-/* ---------- generic log helper ---------- */
-const log = (...a) =>
-  console.log(`[${new Date().toISOString()}]`, ...a);
+/* ---------- tiny log helper ---------- */
+const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
-  const from = role.value;                  // "en" or "zh"
+  /* who speaks what? ---------------------------------------------------- */
+  const from = role.value;            // "en" or "zh"
   const to   = from === "en" ? "zh" : "en";
-
   log("UI ­→ start; from:", from, "to:", to);
 
-  /* ----- fetch shared session key ----- */
+  /* get (or reuse) a shared realtime session --------------------------- */
   const {client_secret:{value:key}} =
         await (await fetch("/session")).json();
   log("SESSION ­→ received client secret…");
 
-  /* ---------- RTCPeerConnection ---------- */
+  /* ---------- WebRTC: peer connection --------------------------------- */
   const pc = new RTCPeerConnection();
-  window.pc = pc;                   // poke it from DevTools if you want
+  window.pc = pc;                     // handy for dev-tools
 
-  /* very verbose state tracing */
+  /* very noisy state tracing */
   {
-    const dump = () => log("PC state",
-      {signaling     : pc.signalingState,
-       iceGathering  : pc.iceGatheringState,
-       iceConnection : pc.iceConnectionState,
-       connection    : pc.connectionState});
-    pc.onsignalingstatechange      =
-    pc.onicegatheringstatechange   =
-    pc.oniceconnectionstatechange  =
-    pc.onconnectionstatechange     = dump;
+    const dump = () => log("PC state", {
+      signaling     : pc.signalingState,
+      iceGathering  : pc.iceGatheringState,
+      iceConnection : pc.iceConnectionState,
+      connection    : pc.connectionState });
+    pc.onsignalingstatechange     =
+    pc.onicegatheringstatechange  =
+    pc.oniceconnectionstatechange =
+    pc.onconnectionstatechange    = dump;
   }
   pc.onicecandidate = ({candidate}) => log("PC icecandidate:", candidate);
 
+  /* remote audio tracks ------------------------------------------------- */
   pc.ontrack = ({track, streams:[stream]}) => {
     log("PC ontrack → kind:", track.kind, "id:", track.id);
 
@@ -46,49 +48,53 @@ start.onclick = async () => {
     track.onunmute = () => log("   track unmuted");
     track.onended  = () => log("   track ended");
 
-    /* play whatever we get back from OpenAI */
     const audio = Object.assign(new Audio(), {autoplay:true, srcObject:stream});
     document.body.appendChild(audio);
   };
 
-  /* ---------- Microphone ---------- */
+  /* ---------- local microphone ---------------------------------------- */
   const gum = await navigator.mediaDevices.getUserMedia({
     audio: {echoCancellation:true, noiseSuppression:true}
   });
   const [mic] = gum.getAudioTracks();
   log("GUM ­→ got mic track:", mic.label || mic.id);
   mic.onended = () => log("mic track ended");
-
   pc.addTrack(mic, gum);
 
-  /* ---------- DataChannel ---------- */
+  /* ---------- DataChannel --------------------------------------------- */
   const dc = pc.createDataChannel("oai-events");
   window.dc = dc;
 
-  dc.onopen  = () => log("DC open");
-  dc.onclose = () => log("DC close");
-  dc.onerror = e  => log("DC error", e);
+  dc.addEventListener("open" , () => log("DC open"));
+  dc.addEventListener("close", () => log("DC close"));
+  dc.addEventListener("error", e => log("DC error", e));
 
-  dc.onmessage = ev => {
+  let prefixSent = false;   // guard so we send exactly once
+
+  dc.addEventListener("message", ev => {
     /* The realtime service sends JSON; fall back to raw text if parsing fails */
-    try { log("DC ⇠", JSON.parse(ev.data)); }
-    catch { log("DC ⇠ (raw)", ev.data); }
-  };
+    let msg;
+    try { msg = JSON.parse(ev.data); log("DC ⇠", msg); }
+    catch {        log("DC ⇠ (raw)", ev.data); return; }
 
-  /* once the channel is up, prepend the “translate …” prefix */
-  dc.onopen = () => {
-    const prefix = to === "en"
-      ? "translate to english"
-      : "translate to chinese";
-    log("DC ⇢ sending persistent user prefix:", prefix);
+    /* Wait for the service to confirm that the session is ready ---------- */
+    if (!prefixSent && msg.type === "session.created") {
+      prefixSent = true;
 
-    dc.send(JSON.stringify({
-      type   : "message.add",
-      message: {role:"user", content: prefix}
-    }));
-  };
+      const prefix = (to === "en")
+        ? "translate to english"
+        : "translate to chinese";
 
-  /* ---------- SDP exchange ---------- */
+      log("DC ⇢ sending persistent user prefix:", prefix);
+
+      dc.send(JSON.stringify({
+        type   : "message.add",
+        message: {role:"user", content: prefix}
+      }));
+    }
+  });
+
+  /* ---------- SDP offer / answer -------------------------------------- */
   log("PC ­→ createOffer");
   await pc.setLocalDescription(await pc.createOffer());
   log("PC ­→ localDescription set (length", pc.localDescription.sdp.length, ")");
