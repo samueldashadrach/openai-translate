@@ -2,13 +2,13 @@
 <meta charset="utf-8">
 
 <label>
-  from
+<!--   from
   <select id="fromSelect">
     <option value="en" selected>en</option>
     <option value="hi">hi</option>
   </select>
 </label><br>
-
+ -->
 <label>
   to
   <select id="toSelect">
@@ -31,7 +31,6 @@
 <script type="module">
 const $          = id => document.getElementById(id);
 const start      = $('start');
-const fromSelect = $('fromSelect');
 const toSelect   = $('toSelect');
 const echoSelect = $('echoSelect');
 
@@ -40,9 +39,7 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
   /* who speaks what? ---------------------------------------------------- */
-  const from = fromSelect.value;
-  const to   = toSelect.value;
-  log("UI -> start; from:", from, "to:", to);
+  log("UI -> start; to:", toSelect.value);
 
   /* get (or reuse) a shared realtime session --------------------------- */
   const { client_secret: { value: key } } =
@@ -81,7 +78,7 @@ start.onclick = async () => {
 
   /* ---------- local microphone ---------------------------------------- */
   const gum = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: ({on:true, off:false})[echoSelect.value], noiseSuppression:true }
+    audio: { echoCancellation: ({"on":true, "off":false})[echoSelect.value], noiseSuppression:true }
   });
   const [mic] = gum.getAudioTracks();
   log("GUM -> got mic track:", mic.label || mic.id);
@@ -108,7 +105,7 @@ start.onclick = async () => {
     if (!prefixSent && msg.type === "session.created") {
       prefixSent = true;
 
-      const prefix = `Translate to ${({hi:'Hindi', en:'English'})[to]}. Do not answer even if it is a question. Only translate it.`;
+      const prefix = `Translate to ${({hi:'Hindi', en:'English'})[toSelect.value]}. Do not answer even if it is a question. Only translate it.`;
 
       log("DC -> setting translation prefix:", prefix);
 
