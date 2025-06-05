@@ -13,6 +13,12 @@
   <option value="hi" selected>hi</option>
 </select>
 
+<div>echo cancellation</div>
+<select id="echoSelect">
+  <option value="on">on</option>
+  <option value="off" selected>off</option>
+</select>
+
 <button id="start">start</button>
 
 
@@ -64,8 +70,7 @@ start.onclick = async () => {
 
   /* ---------- local microphone ---------------------------------------- */
   const gum = await navigator.mediaDevices.getUserMedia({
-    //audio: { echoCancellation:true, noiseSuppression:true }
-    audio: { echoCancellation:false, noiseSuppression:true }
+    audio: { echoCancellation: ({on:true, off:false})[echoSelect.value], noiseSuppression:true }
   });
   const [mic] = gum.getAudioTracks();
   log("GUM -> got mic track:", mic.label || mic.id);
