@@ -1,14 +1,15 @@
 <!doctype html>
 <meta charset="utf-8">
 
-<label>
-<!--   from
+<!-- <label>
+  from
   <select id="fromSelect">
     <option value="en" selected>en</option>
     <option value="hi">hi</option>
   </select>
 </label><br>
  -->
+
 <label>
   to
   <select id="toSelect">
@@ -39,7 +40,7 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
   this.disabled = true;
-  
+
   /* who speaks what? ---------------------------------------------------- */
   log("UI -> start; to:", toSelect.value);
 
