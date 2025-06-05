@@ -72,9 +72,9 @@ openai -> server
 alice <- server
 ```
 
-
-
 main thing missing: some library that can open 2 webrtc streams, and then pipe output of one into input of the other
+
+ideal solution: openai supports this feature out of the box, allows sending output to a different client than the input. 
 
 
 
