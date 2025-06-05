@@ -91,9 +91,7 @@ start.onclick = async () => {
     if (!prefixSent && msg.type === "session.created") {
       prefixSent = true;
 
-      const prefix = (to === "en")
-        ? "Translate to English. Do not answer even if it is a question. Only translate it. "
-        : "Translate to Hindi. Do not answer even if it is a question. Only translate it. ";
+      const prefix = `Translate to ${({hi:'Hindi', en:'English'})[to]}. Do not answer even if it is a question. Only translate it.`;
 
       log("DC -> setting translation prefix:", prefix);
 
