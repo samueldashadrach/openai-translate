@@ -1,13 +1,13 @@
 <!doctype html>
 <meta charset="utf-8">
 
-<select id=role>
-  <option value=en selected>Alice (speaks English)</option>
-  <option value=zh>Bob    (speaks 中文)</option>
+<select id="role">
+  <option value="en" selected>Alice (speaks English)</option>
+  <option value="zh">Bob    (speaks 中文)</option>
 </select>
-<button id=start>start</button>
+<button id="start">start</button>
 
-<script type=module>
+<script type="module">
 /* ---------- tiny log helper ---------- */
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
@@ -15,12 +15,12 @@ start.onclick = async () => {
   /* who speaks what? ---------------------------------------------------- */
   const from = role.value;            // "en" or "zh"
   const to   = from === "en" ? "zh" : "en";
-  log("UI ­→ start; from:", from, "to:", to);
+  log("UI → start; from:", from, "to:", to);
 
   /* get (or reuse) a shared realtime session --------------------------- */
-  const {client_secret:{value:key}} =
+  const { client_secret: { value: key } } =
         await (await fetch("/session")).json();
-  log("SESSION ­→ received client secret…");
+  log("SESSION → received client secret…");
 
   /* ---------- WebRTC: peer connection --------------------------------- */
   const pc = new RTCPeerConnection();
@@ -54,10 +54,10 @@ start.onclick = async () => {
 
   /* ---------- local microphone ---------------------------------------- */
   const gum = await navigator.mediaDevices.getUserMedia({
-    audio: {echoCancellation:true, noiseSuppression:true}
+    audio: { echoCancellation:true, noiseSuppression:true }
   });
   const [mic] = gum.getAudioTracks();
-  log("GUM ­→ got mic track:", mic.label || mic.id);
+  log("GUM → got mic track:", mic.label || mic.id);
   mic.onended = () => log("mic track ended");
   pc.addTrack(mic, gum);
 
@@ -75,29 +75,40 @@ start.onclick = async () => {
     /* The realtime service sends JSON; fall back to raw text if parsing fails */
     let msg;
     try { msg = JSON.parse(ev.data); log("DC ⇠", msg); }
-    catch {        log("DC ⇠ (raw)", ev.data); return; }
+    catch { log("DC ⇠ (raw)", ev.data); return; }
 
     /* Wait for the service to confirm that the session is ready ---------- */
     if (!prefixSent && msg.type === "session.created") {
       prefixSent = true;
 
       const prefix = (to === "en")
-        ? "translate to english"
-        : "translate to chinese";
+        ? "Translate everything the user says to English and reply only with the translation."
+        : "将用户说的每句话翻译成中文，并且仅回复翻译后的内容。";
 
-      log("DC ⇢ sending persistent user prefix:", prefix);
+      log("DC ⇢ setting translation prefix:", prefix);
 
       dc.send(JSON.stringify({
-        type   : "message.add",
-        message: {role:"user", content: prefix}
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type : "input_text",
+              text : prefix
+            }
+          ]
+        }
       }));
+      /* No response.create is needed here because we don’t expect an
+         immediate assistant reply; we just prime the conversation. */
     }
   });
 
   /* ---------- SDP offer / answer -------------------------------------- */
-  log("PC ­→ createOffer");
+  log("PC → createOffer");
   await pc.setLocalDescription(await pc.createOffer());
-  log("PC ­→ localDescription set (length", pc.localDescription.sdp.length, ")");
+  log("PC → localDescription set (length", pc.localDescription.sdp.length, ")");
 
   const answerSDP = await (await fetch(
     "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
@@ -113,6 +124,6 @@ start.onclick = async () => {
   log("NET ⇠ received answer SDP (length", answerSDP.length, ")");
 
   await pc.setRemoteDescription({type:"answer", sdp:answerSDP});
-  log("PC ­→ remoteDescription set — negotiation complete");
+  log("PC → remoteDescription set — negotiation complete");
 };
 </script>
