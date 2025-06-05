@@ -1,3 +1,5 @@
+//o3 wrote this, not tested
+
 // server.js  – hands the browser a realtime-session + key
 import express from "express";
 
