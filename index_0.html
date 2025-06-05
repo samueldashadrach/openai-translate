@@ -1,0 +1,58 @@
+<!-- index.html -->
+<!doctype html><meta charset="utf-8">
+<select id=role>
+  <option value=en>Alice (speaks English)</option>
+  <option value=zh>Bob   (speaks 中文)</option>
+</select>
+<button id=start>start</button>
+
+<script type=module>
+start.onclick = async () => {
+  /* who talks what */
+  const from = role.value, to = from === "en" ? "zh" : "en";
+
+  /* 1 ── get realtime session + short-lived key from our server */
+  const {client_secret:{value:key}} = await (await fetch("/session")).json();
+
+  /* 2 ── WebRTC */
+  const pc = new RTCPeerConnection();
+
+  /* play everything the model sends back */
+  pc.ontrack = ev => {
+    const a = new Audio();
+    a.autoplay = true;
+    a.srcObject = ev.streams[0];
+    document.body.appendChild(a);                   // keeps element alive
+  };
+
+  /* send microphone */
+  pc.addTrack(
+    (await navigator.mediaDevices.getUserMedia({audio:true}))
+      .getAudioTracks()[0]
+  );
+
+  /* 3 ── tell GPT-4o to be an interpreter (MUST use channel 'oai-events') */
+  const dc = pc.createDataChannel("oai-events");
+  dc.onopen = () => dc.send(JSON.stringify({
+    type: "session.update",                         // ✓ allowed event type
+    session: {
+      instructions:
+        `You are a real-time interpreter.
+         If the speaker talks in ${from}, reply only in ${to};
+         if the speaker talks in ${to}, reply only in ${from}.`
+    }
+  }));
+
+  /* 4 ── SDP handshake with realtime endpoint */
+  await pc.setLocalDescription(await pc.createOffer());
+  const answerSDP = await (await fetch(
+    "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
+    {
+      method : "POST",
+      headers: { Authorization:`Bearer ${key}`, "Content-Type":"application/sdp" },
+      body   : pc.localDescription.sdp
+    }
+  )).text();
+  await pc.setRemoteDescription({type:"answer", sdp:answerSDP});
+};
+</script>
