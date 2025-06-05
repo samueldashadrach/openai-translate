@@ -18,30 +18,29 @@
 </label><br>
 
 <button id="start">start</button>
-<button id="stop"  disabled>stop</button>      <!-- NEW -->
+<button id="stop"  disabled>stop</button>
 
 <script type="module">
-/* -------------------- DOM helpers ------------------------------------ */
+
 const $          = id => document.getElementById(id);
 const start      = $('start');
-const stop       = $('stop');                  // NEW
+const stop       = $('stop');
 const toSelect   = $('toSelect');
 const echoSelect = $('echoSelect');
 
-/* -------------------- misc helpers ----------------------------------- */
+
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
-/* -------------------- keep handles around for stopping --------------- */
 let pc   = null;
 let dc   = null;
-let gum  = null;        // local MediaStream
+let gum  = null;
 
 /* ===================================================================== */
 /* START button                                                          */
 /* ===================================================================== */
 start.onclick = async () => {
   start.disabled = true;
-  stop.disabled  = false;                       // NEW
+  stop.disabled  = false;
 
   /* who speaks what? -------------------------------------------------- */
   log("UI -> start; to:", toSelect.value);
@@ -52,7 +51,7 @@ start.onclick = async () => {
   log("SESSION -> received client secret…");
 
   /* ---------- WebRTC: peer connection ------------------------------- */
-  pc = new RTCPeerConnection();                 // CHANGED (was const)
+  pc = new RTCPeerConnection();
   window.pc = pc;                               // handy for dev-tools
 
   /* very noisy state tracing */
@@ -91,7 +90,7 @@ start.onclick = async () => {
   pc.addTrack(mic, gum);
 
   /* ---------- DataChannel ------------------------------------------- */
-  dc = pc.createDataChannel("oai-events");      // CHANGED (was const)
+  dc = pc.createDataChannel("oai-events");
   window.dc = dc;
 
   dc.addEventListener("open" , () => log("DC open"));
@@ -107,9 +106,7 @@ start.onclick = async () => {
 
     if (!prefixSent && msg.type === "session.created") {
       prefixSent = true;
-      const prefix =
-        `Translate to ${({hi:'Hindi', en:'English'})[toSelect.value]}. \
-Do not answer even if it is a question. Only translate it.`;
+      const prefix = `Translate to ${({hi:'Hindi', en:'English'})[toSelect.value]}. Do not answer even if it is a question. Only translate it.`;
 
       log("DC -> setting translation prefix:", prefix);
 
@@ -180,6 +177,6 @@ stop.onclick = () => {
   /* ----- remove any remote audio tags ------------------------------- */
   document.querySelectorAll("audio").forEach(a => a.remove());
 
-  log("Session cleaned-up ✔️");
+  log("Session cleaned-up");
 };
 </script>
