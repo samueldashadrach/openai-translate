@@ -1,50 +1,112 @@
 <!doctype html><meta charset="utf-8">
 <select id=role>
-  <option value=en>Alice (speaks English)</option>
-  <option value=zh>Bob   (speaks 中文)</option>
+  <option value=en selected>Alice (speaks English)</option>
+  <option value=zh>Bob    (speaks 中文)</option>
 </select>
 <button id=start>start</button>
 
 <script type=module>
+/* ---------- generic log helper ---------- */
+const log = (...a) =>
+  console.log(`[${new Date().toISOString()}]`, ...a);
+
 start.onclick = async () => {
-  const from = role.value;               // "en" or "zh"
+  const from = role.value;                  // "en" or "zh"
   const to   = from === "en" ? "zh" : "en";
 
-  const {client_secret:{value:key}} = await (await fetch("/session")).json();
+  log("UI ­→ start; from:", from, "to:", to);
 
+  /* ----- fetch shared session key ----- */
+  const {client_secret:{value:key}} =
+        await (await fetch("/session")).json();
+  log("SESSION ­→ received client secret…");
+
+  /* ---------- RTCPeerConnection ---------- */
   const pc = new RTCPeerConnection();
+  window.pc = pc;                   // poke it from DevTools if you want
 
-  pc.ontrack = ({streams:[s]}) => {
-    const a = Object.assign(new Audio(), {autoplay:true, srcObject:s});
-    document.body.appendChild(a);
+  /* very verbose state tracing */
+  {
+    const dump = () => log("PC state",
+      {signaling     : pc.signalingState,
+       iceGathering  : pc.iceGatheringState,
+       iceConnection : pc.iceConnectionState,
+       connection    : pc.connectionState});
+    pc.onsignalingstatechange      =
+    pc.onicegatheringstatechange   =
+    pc.oniceconnectionstatechange  =
+    pc.onconnectionstatechange     = dump;
+  }
+  pc.onicecandidate = ({candidate}) => log("PC icecandidate:", candidate);
+
+  pc.ontrack = ({track, streams:[stream]}) => {
+    log("PC ontrack → kind:", track.kind, "id:", track.id);
+
+    track.onmute   = () => log("   track muted");
+    track.onunmute = () => log("   track unmuted");
+    track.onended  = () => log("   track ended");
+
+    /* play whatever we get back from OpenAI */
+    const audio = Object.assign(new Audio(), {autoplay:true, srcObject:stream});
+    document.body.appendChild(audio);
   };
 
-  const [mic] = (await navigator.mediaDevices.getUserMedia({
-                  audio:{echoCancellation:true, noiseSuppression:true}
-                })).getAudioTracks();
-  pc.addTrack(mic);
+  /* ---------- Microphone ---------- */
+  const gum = await navigator.mediaDevices.getUserMedia({
+    audio: {echoCancellation:true, noiseSuppression:true}
+  });
+  const [mic] = gum.getAudioTracks();
+  log("GUM ­→ got mic track:", mic.label || mic.id);
+  mic.onended = () => log("mic track ended");
 
+  pc.addTrack(mic, gum);
+
+  /* ---------- DataChannel ---------- */
   const dc = pc.createDataChannel("oai-events");
+  window.dc = dc;
+
+  dc.onopen  = () => log("DC open");
+  dc.onclose = () => log("DC close");
+  dc.onerror = e  => log("DC error", e);
+
+  dc.onmessage = ev => {
+    /* The realtime service sends JSON; fall back to raw text if parsing fails */
+    try { log("DC ⇠", JSON.parse(ev.data)); }
+    catch { log("DC ⇠ (raw)", ev.data); }
+  };
+
+  /* once the channel is up, prepend the “translate …” prefix */
   dc.onopen = () => {
-    /* send a short *user* message that will be prepended to
-       every following audio turn.  (“translate to english” or “…chinese”) */
-    const prefix = to === "en" ? "translate to english"
-                               : "translate to chinese";
+    const prefix = to === "en"
+      ? "translate to english"
+      : "translate to chinese";
+    log("DC ⇢ sending persistent user prefix:", prefix);
+
     dc.send(JSON.stringify({
       type   : "message.add",
       message: {role:"user", content: prefix}
     }));
   };
 
+  /* ---------- SDP exchange ---------- */
+  log("PC ­→ createOffer");
   await pc.setLocalDescription(await pc.createOffer());
+  log("PC ­→ localDescription set (length", pc.localDescription.sdp.length, ")");
+
   const answerSDP = await (await fetch(
     "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
     {
       method : "POST",
-      headers: {Authorization:`Bearer ${key}`, "Content-Type":"application/sdp"},
+      headers: {
+        Authorization : `Bearer ${key}`,
+        "Content-Type": "application/sdp"
+      },
       body   : pc.localDescription.sdp
     }
   )).text();
+  log("NET ⇠ received answer SDP (length", answerSDP.length, ")");
+
   await pc.setRemoteDescription({type:"answer", sdp:answerSDP});
+  log("PC ­→ remoteDescription set — negotiation complete");
 };
 </script>

@@ -30,6 +30,7 @@ async function getSession() {
 
 app.get("/session", async (_req, res, next) => {
   try {
+    console.log("SERVER: /session requested");
     const {client_secret} = await getSession();
     res.json({client_secret});                      // {value:"sk-..."}
   } catch (e) { next(e); }
