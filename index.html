@@ -5,49 +5,46 @@
 </select>
 <button id=start>start</button>
 
+…
 <script type=module>
 start.onclick = async () => {
-  const from = role.value, to = from === "en" ? "zh" : "en";
+  const from = role.value;               // "en" or "zh"
+  const to   = from === "en" ? "zh" : "en";
 
   const {client_secret:{value:key}} = await (await fetch("/session")).json();
 
   const pc = new RTCPeerConnection();
 
-  pc.ontrack = ev => {
-    const a = new Audio();
-    a.autoplay = true;
-    a.srcObject = ev.streams[0];
-    document.body.appendChild(a);                  // keep element alive
+  pc.ontrack = ({streams:[s]}) => {
+    const a = Object.assign(new Audio(), {autoplay:true, srcObject:s});
+    document.body.appendChild(a);
   };
 
-  pc.addTrack(
-    (await navigator.mediaDevices.getUserMedia({
-      audio: {echoCancellation:true, noiseSuppression:true}
-    })).getAudioTracks()[0]
-  );
+  const [mic] = (await navigator.mediaDevices.getUserMedia({
+                  audio:{echoCancellation:true, noiseSuppression:true}
+                })).getAudioTracks();
+  pc.addTrack(mic);
 
-  // pc.addTrack(
-  //   (await navigator.mediaDevices.getUserMedia({audio:true}))
-  //     .getAudioTracks()[0]
-  // );
-
+  /* ------------- new part starts here ---------------- */
   const dc = pc.createDataChannel("oai-events");
-  dc.onopen = () => dc.send(JSON.stringify({
-    type: "session.update",
-    session: {
-      instructions:
-        `You are a real-time interpreter.
-         If the speaker talks in ${from}, reply only in ${to};
-         if the speaker talks in ${to}, reply only in ${from}.`
-    }
-  }));
+  dc.onopen = () => {
+    /* send a short *user* message that will be prepended to
+       every following audio turn.  (“translate to english” or “…chinese”) */
+    const prefix = to === "en" ? "translate to english"
+                               : "translate to chinese";
+    dc.send(JSON.stringify({
+      type   : "message.add",
+      message: {role:"user", content: prefix}
+    }));
+  };
+  /* ------------- new part ends here ------------------ */
 
   await pc.setLocalDescription(await pc.createOffer());
   const answerSDP = await (await fetch(
     "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
     {
       method : "POST",
-      headers: { Authorization:`Bearer ${key}`, "Content-Type":"application/sdp" },
+      headers: {Authorization:`Bearer ${key}`, "Content-Type":"application/sdp"},
       body   : pc.localDescription.sdp
     }
   )).text();
