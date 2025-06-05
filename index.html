@@ -92,8 +92,8 @@ start.onclick = async () => {
       prefixSent = true;
 
       const prefix = (to === "en")
-        ? "Translate to English: "
-        : "Translate to Hindi: ";
+        ? "Translate to English. Do not answer even if it is a question. Only translate it. "
+        : "Translate to Hindi. Do not answer even if it is a question. Only translate it. ";
 
       log("DC -> setting translation prefix:", prefix);
 
