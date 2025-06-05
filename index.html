@@ -66,7 +66,6 @@ start.onclick = async () => {
   const gum = await navigator.mediaDevices.getUserMedia({
     //audio: { echoCancellation:true, noiseSuppression:true }
     audio: { echoCancellation:false, noiseSuppression:true }
-    //audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
   });
   const [mic] = gum.getAudioTracks();
   log("GUM -> got mic track:", mic.label || mic.id);
