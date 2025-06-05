@@ -33,7 +33,14 @@
 
 
 <script type="module">
-/* ---------- tiny log helper ---------- */
+/* ---------- DOM helpers ------------------------------------------------ */
+const $          = id => document.getElementById(id);
+const start      = $('start');
+const fromSelect = $('fromSelect');
+const toSelect   = $('toSelect');
+const echoSelect = $('echoSelect');
+
+/* ---------- tiny log helper -------------------------------------------- */
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
