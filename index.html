@@ -3,7 +3,7 @@
 
 <select id="role">
   <option value="en" selected>Alice (speaks English)</option>
-  <option value="zh">Bob    (speaks 中文)</option>
+  <option value="hi">Bob    (speaks Hindi)</option>
 </select>
 <button id="start">start</button>
 
@@ -13,8 +13,8 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
   /* who speaks what? ---------------------------------------------------- */
-  const from = role.value;            // "en" or "zh"
-  const to   = from === "en" ? "zh" : "en";
+  const from = role.value;            // "en" or "hi"
+  const to   = from === "en" ? "hi" : "en";
   log("UI → start; from:", from, "to:", to);
 
   /* get (or reuse) a shared realtime session --------------------------- */
@@ -83,7 +83,7 @@ start.onclick = async () => {
 
       const prefix = (to === "en")
         ? "To English: "
-        : "To Chinese: ";
+        : "To Hindi: ";
 
       log("DC ⇢ setting translation prefix:", prefix);
 
