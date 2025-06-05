@@ -107,6 +107,66 @@ https://github.com/livekit-examples/python-agents-examples/blob/main/realtime/op
 https://www.twilio.com/en-us/blog/live-translation-contact-center-openai-realtime-api
 
 
+---
+
+"""
+I want to build voice translate app. bob hears translation of alice. alice hears translation of bob. using openai realtime api, one limitation is that it can only respond back to the same device that opened the webrtc session with openai. hence will forward packets to implement following workflow.
+
+(alice does not hear her own translation, and bob does not need to hear his own translation.)
+"""
+
+```
+alice -> server
+
+server -> openai 
+server <- openai
+
+server -> bob
+
+server <- bob
+
+openai <- server
+openai -> server
+
+alice <- server
+```
+
+o3 says
+```
+You only need the shim because Janus cannot ​originate​ a WebRTC PeerConnection.  
+Pick a media server that ​can​ open its own PeerConnection and you can wire it
+straight to the OpenAI real-time endpoint, no plain-RTP hop required.
+
+Open-source servers that already do that:
+
+1. mediasoup (Node/C++):  
+   • createWebRtcTransport() inside the same process for the browsers  
+   • create a second WebRtcTransport that dials OpenAI  
+   • pipe the Producer/Consumer objects between the two transports.
+
+2. LiveKit (Go/Rust):  
+   • start an “ingress/bot participant” in the room  
+   • that bot makes a WHIP/WHEP (i.e. normal WebRTC) offer to OpenAI  
+   • publish the returned track back into the room.
+
+3. ion-sfu / any Pion-based SFU (Go):  
+   • Pion can create a second PeerConnection internally  
+   • addTrack() the browser’s audio to that PC, send to OpenAI  
+   • onTrack() from OpenAI, add it to the router and publish to the other user.
+
+4. GStreamer with webrtcbin (C/Rust/Python):  
+   • one webrtcbin element talks to Alice/Bob  
+   • another webrtcbin element dials OpenAI  
+   • link the pads—done.
+
+Cloud SFUs that let you spawn server-side “media bots” (same idea, no shim):
+
+• Twilio Voice Media Streams  
+• Vonage Media Processor  
+• Daily Server-Side Endpoints  
+
+In short, use any SFU that can act as an ​active​ WebRTC endpoint (mediasoup, LiveKit, ion-sfu, GStreamer, etc.). That eliminates the RTP→WebRTC shim entirely.
+```
 
 
 
