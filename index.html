@@ -8,39 +8,39 @@
 <button id=start>start</button>
 
 <script type=module>
-/* ---------------- little helpers ------------------------------------ */
+/* ---------- tiny log helper ---------- */
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
-const uuid = () => crypto.randomUUID();                 // RFC-4122 v4
 
 start.onclick = async () => {
-  /* who speaks what? --------------------------------------------------- */
+  /* who speaks what? ---------------------------------------------------- */
   const from = role.value;            // "en" or "zh"
   const to   = from === "en" ? "zh" : "en";
   log("UI ­→ start; from:", from, "to:", to);
 
-  /* obtain (or reuse) an OpenAI realtime session ---------------------- */
+  /* get (or reuse) a shared realtime session --------------------------- */
   const {client_secret:{value:key}} =
         await (await fetch("/session")).json();
   log("SESSION ­→ received client secret…");
 
-  /* ------------------- peer connection -------------------------------- */
+  /* ---------- WebRTC: peer connection --------------------------------- */
   const pc = new RTCPeerConnection();
-  window.pc = pc;                         // inspect from dev-tools
+  window.pc = pc;                     // handy for dev-tools
 
-  /* very verbose state tracing */
-  const dump = () => log("PC state", {
-    signaling     : pc.signalingState,
-    iceGathering  : pc.iceGatheringState,
-    iceConnection : pc.iceConnectionState,
-    connection    : pc.connectionState });
-  pc.onsignalingstatechange     =
-  pc.onicegatheringstatechange  =
-  pc.oniceconnectionstatechange =
-  pc.onconnectionstatechange    = dump;
-
+  /* very noisy state tracing */
+  {
+    const dump = () => log("PC state", {
+      signaling     : pc.signalingState,
+      iceGathering  : pc.iceGatheringState,
+      iceConnection : pc.iceConnectionState,
+      connection    : pc.connectionState });
+    pc.onsignalingstatechange     =
+    pc.onicegatheringstatechange  =
+    pc.oniceconnectionstatechange =
+    pc.onconnectionstatechange    = dump;
+  }
   pc.onicecandidate = ({candidate}) => log("PC icecandidate:", candidate);
 
-  /* remote audio from OpenAI ------------------------------------------ */
+  /* remote audio tracks ------------------------------------------------- */
   pc.ontrack = ({track, streams:[stream]}) => {
     log("PC ontrack → kind:", track.kind, "id:", track.id);
 
@@ -52,7 +52,7 @@ start.onclick = async () => {
     document.body.appendChild(audio);
   };
 
-  /* microphone -------------------------------------------------------- */
+  /* ---------- local microphone ---------------------------------------- */
   const gum = await navigator.mediaDevices.getUserMedia({
     audio: {echoCancellation:true, noiseSuppression:true}
   });
@@ -61,7 +61,7 @@ start.onclick = async () => {
   mic.onended = () => log("mic track ended");
   pc.addTrack(mic, gum);
 
-  /* ----------------- data-channel ------------------------------------ */
+  /* ---------- DataChannel --------------------------------------------- */
   const dc = pc.createDataChannel("oai-events");
   window.dc = dc;
 
@@ -69,40 +69,32 @@ start.onclick = async () => {
   dc.addEventListener("close", () => log("DC close"));
   dc.addEventListener("error", e => log("DC error", e));
 
-  let prefixSent = false;      // make sure we send exactly once
-  let sessionId  = null;       // filled when we get session.created
+  let prefixSent = false;   // guard so we send exactly once
 
   dc.addEventListener("message", ev => {
+    /* The realtime service sends JSON; fall back to raw text if parsing fails */
     let msg;
     try { msg = JSON.parse(ev.data); log("DC ⇠", msg); }
     catch {        log("DC ⇠ (raw)", ev.data); return; }
 
-    /* wait until the back-end tells us the session id ------------------ */
-    if (msg.type === "session.created") {
-      sessionId = msg.session.id;
-      if (!prefixSent) {
-        const prefix = (to === "en")
-          ? "translate to english"
-          : "translate to chinese";
+    /* Wait for the service to confirm that the session is ready ---------- */
+    if (!prefixSent && msg.type === "session.created") {
+      prefixSent = true;
 
-        log("DC ⇢ sending persistent user prefix:", prefix);
+      const prefix = (to === "en")
+        ? "translate to english"
+        : "translate to chinese";
 
-        dc.send(JSON.stringify({
-          type     : "message.add",
-          event_id : uuid(),               // <-- REQUIRED
-          session_id: sessionId,           // <-- REQUIRED
-          message  : {
-            id     : uuid(),               // <-- REQUIRED
-            role   : "user",
-            content: prefix
-          }
-        }));
-        prefixSent = true;
-      }
+      log("DC ⇢ sending persistent user prefix:", prefix);
+
+      dc.send(JSON.stringify({
+        type   : "message.add",
+        message: {role:"user", content: prefix}
+      }));
     }
   });
 
-  /* ------------------- SDP offer / answer ---------------------------- */
+  /* ---------- SDP offer / answer -------------------------------------- */
   log("PC ­→ createOffer");
   await pc.setLocalDescription(await pc.createOffer());
   log("PC ­→ localDescription set (length", pc.localDescription.sdp.length, ")");
