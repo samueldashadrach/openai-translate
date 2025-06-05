@@ -35,4 +35,4 @@ app.get("/session", async (_req, res, next) => {
   } catch (e) { next(e); }
 });
 
-app.listen(3000, () => console.log("open  http://localhost:3000"));
+app.listen(3000, () => console.log("listening on port 3000"));
