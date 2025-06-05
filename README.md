@@ -7,19 +7,23 @@ server.js works with 1 computer
 
 for bidirectional, likely setup required
 
+```
 openai <- alice
 openai -> alice -> bob
 
 bob -> openai
 alice <- bob <- openai
+```
 
 so far we have working:
 
+```
 openai <- alice
 openai -> alice
 
 bob -> openai
 bob <- openai
+```
 
 now we need to do:
 
@@ -28,6 +32,7 @@ bob mirroring the output to alice
 
 remember opening ports for p2p connections can be a massive pain, so there's a real possibility you need to involve the server regardless
 
+```
 option A:
 
 openai <- alice
@@ -59,14 +64,13 @@ server <- openai
 
 server -> bob
 
-
 server <- bob
 
 openai <- server
 openai -> server
 
 alice <- server
-
+```
 
 
 
