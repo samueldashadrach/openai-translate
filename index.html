@@ -1,11 +1,21 @@
 <!doctype html>
 <meta charset="utf-8">
 
-<select id="role">
-  <option value="en" selected>Alice (speaks English)</option>
-  <option value="hi">Bob    (speaks Hindi)</option>
+<div>from</div>
+<select id="fromSelect">
+  <option value="en" selected>en</option>
+  <option value="hi">hi</option>
 </select>
+
+<div>to</div>
+<select id="toSelect">
+  <option value="en">en</option>
+  <option value="hi" selected>hi</option>
+</select>
+
 <button id="start">start</button>
+
+
 
 <script type="module">
 /* ---------- tiny log helper ---------- */
@@ -13,8 +23,8 @@ const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
   /* who speaks what? ---------------------------------------------------- */
-  const from = role.value;            // "en" or "hi"
-  const to   = from === "en" ? "hi" : "en";
+  const from = fromSelect.value;
+  const to   = toSelect.value;
   log("UI -> start; from:", from, "to:", to);
 
   /* get (or reuse) a shared realtime session --------------------------- */
