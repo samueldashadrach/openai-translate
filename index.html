@@ -24,7 +24,6 @@ start.onclick = async () => {
                 })).getAudioTracks();
   pc.addTrack(mic);
 
-  /* ------------- new part starts here ---------------- */
   const dc = pc.createDataChannel("oai-events");
   dc.onopen = () => {
     /* send a short *user* message that will be prepended to
@@ -36,7 +35,6 @@ start.onclick = async () => {
       message: {role:"user", content: prefix}
     }));
   };
-  /* ------------- new part ends here ------------------ */
 
   await pc.setLocalDescription(await pc.createOffer());
   const answerSDP = await (await fetch(
