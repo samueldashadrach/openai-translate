@@ -39,7 +39,7 @@ const echoSelect = $('echoSelect');
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
 
 start.onclick = async () => {
-  this.disabled = true;
+  start.disabled = true;
 
   /* who speaks what? ---------------------------------------------------- */
   log("UI -> start; to:", toSelect.value);
