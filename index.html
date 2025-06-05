@@ -15,12 +15,12 @@ start.onclick = async () => {
   /* who speaks what? ---------------------------------------------------- */
   const from = role.value;            // "en" or "hi"
   const to   = from === "en" ? "hi" : "en";
-  log("UI → start; from:", from, "to:", to);
+  log("UI -> start; from:", from, "to:", to);
 
   /* get (or reuse) a shared realtime session --------------------------- */
   const { client_secret: { value: key } } =
         await (await fetch("/session")).json();
-  log("SESSION → received client secret…");
+  log("SESSION -> received client secret…");
 
   /* ---------- WebRTC: peer connection --------------------------------- */
   const pc = new RTCPeerConnection();
@@ -42,7 +42,7 @@ start.onclick = async () => {
 
   /* remote audio tracks ------------------------------------------------- */
   pc.ontrack = ({track, streams:[stream]}) => {
-    log("PC ontrack → kind:", track.kind, "id:", track.id);
+    log("PC ontrack -> kind:", track.kind, "id:", track.id);
 
     track.onmute   = () => log("   track muted");
     track.onunmute = () => log("   track unmuted");
@@ -57,7 +57,7 @@ start.onclick = async () => {
     audio: { echoCancellation:true, noiseSuppression:true }
   });
   const [mic] = gum.getAudioTracks();
-  log("GUM → got mic track:", mic.label || mic.id);
+  log("GUM -> got mic track:", mic.label || mic.id);
   mic.onended = () => log("mic track ended");
   pc.addTrack(mic, gum);
 
@@ -75,7 +75,7 @@ start.onclick = async () => {
     /* The realtime service sends JSON; fall back to raw text if parsing fails */
     let msg;
     try { msg = JSON.parse(ev.data); log("DC ⇠", msg); }
-    catch { log("DC ⇠ (raw)", ev.data); return; }
+    catch { log("DC <- (raw)", ev.data); return; }
 
     /* Wait for the service to confirm that the session is ready ---------- */
     if (!prefixSent && msg.type === "session.created") {
@@ -85,7 +85,7 @@ start.onclick = async () => {
         ? "Translate to English: "
         : "Translate to Hindi: ";
 
-      log("DC ⇢ setting translation prefix:", prefix);
+      log("DC -> setting translation prefix:", prefix);
 
       dc.send(JSON.stringify({
         type: "conversation.item.create",
@@ -107,9 +107,9 @@ start.onclick = async () => {
   });
 
   /* ---------- SDP offer / answer -------------------------------------- */
-  log("PC → createOffer");
+  log("PC -> createOffer");
   await pc.setLocalDescription(await pc.createOffer());
-  log("PC → localDescription set (length", pc.localDescription.sdp.length, ")");
+  log("PC -> localDescription set (length", pc.localDescription.sdp.length, ")");
 
   const answerSDP = await (await fetch(
     "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
@@ -122,9 +122,9 @@ start.onclick = async () => {
       body   : pc.localDescription.sdp
     }
   )).text();
-  log("NET ⇠ received answer SDP (length", answerSDP.length, ")");
+  log("NET <- received answer SDP (length", answerSDP.length, ")");
 
   await pc.setRemoteDescription({type:"answer", sdp:answerSDP});
-  log("PC → remoteDescription set — negotiation complete");
+  log("PC -> remoteDescription set — negotiation complete");
 };
 </script>
