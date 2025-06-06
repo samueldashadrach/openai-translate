@@ -11,9 +11,9 @@ connectBtn.onclick = () => {
   /* ───────────────── connect to relay ────────────────── */
 connectBtn.onclick = () => {
   // pick ws:// on HTTP pages, wss:// on HTTPS pages
+
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const port   = location.port ? `:${location.port}` : '';
-  ws = new WebSocket(`${scheme}://${location.hostname}${port}`);
+  ws = new WebSocket(`${scheme}://${location.host}`);
   ws.binaryType = 'arraybuffer';
   
   ws.onopen = () => {
