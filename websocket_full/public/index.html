@@ -1,0 +1,30 @@
+<!-- public/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Realtime Translator</title>
+  <style>
+    body      { font-family: system-ui, sans-serif; padding:2rem; }
+    button    { margin:.3rem .2rem; padding:.6rem 1.2rem; font-size:1rem; }
+    #captions { margin-top:1rem; font-size:1.2rem; font-style:italic; }
+  </style>
+</head>
+<body>
+  <h1>Realtime Translator</h1>
+
+  <label>
+    I am:
+    <select id="role">
+      <option value="alice">Alice (English → Spanish)</option>
+      <option value="bob">Bob (Spanish → English)</option>
+    </select>
+  </label>
+  <button id="connect">Connect</button>
+  <button id="talk" disabled>Hold to talk</button>
+
+  <div id="captions"></div>
+
+  <script src="client.js"></script>
+</body>
+</html>
