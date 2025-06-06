@@ -4,11 +4,11 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import WebSocket from 'ws';
 
-/* ──────────────── helpers ──────────────── */
+/* ─────────────── misc helpers ─────────────── */
 const ts  = () => new Date().toISOString();
 const dbg = (tag, ...m) => console.log(ts(), `[${tag}]`, ...m);
 
-/* ───────────── http + static ───────────── */
+/* ───────────── HTTP + static files ───────────── */
 const app    = express();
 const server = http.createServer(app);
 app.use(express.static('public'));
@@ -39,14 +39,14 @@ function openAiSession(name, prompt) {
 
 const A2B = openAiSession(
   'A2B',
-  'You are a real-time interpreter. Input: English. Output: Spanish. '
-  + 'Respond ONLY with translated speech and text.'
+  'You are a real-time interpreter. Input language: English. '
+  + 'Output language: Spanish. Respond ONLY with translated speech and text.'
 );
 
 const B2A = openAiSession(
   'B2A',
-  'You are a real-time interpreter. Input: Spanish. Output: English. '
-  + 'Respond ONLY with translated speech and text.'
+  'You are a real-time interpreter. Input language: Spanish. '
+  + 'Output language: English. Respond ONLY with translated speech and text.'
 );
 
 /* ───────────── browser ↔ relay socket ───────────── */
@@ -54,10 +54,10 @@ const clientWss = new WebSocketServer({ server });
 let aliceSocket, bobSocket;
 
 clientWss.on('connection', socket => {
-  let role;                     // "alice" | "bob"
+  let role;                       // "alice" | "bob"
 
   socket.on('message', (data, isBinary) => {
-    /* first text frame defines who this client is */
+    /* first text frame = role announcement */
     if (!role && !isBinary) {
       role = JSON.parse(data.toString()).role;
       if (role === 'alice') aliceSocket = socket;
@@ -66,17 +66,17 @@ clientWss.on('connection', socket => {
       return;
     }
 
-    /* microphone audio from the client */
+    /* audio from microphone */
     if (isBinary) {
       dbg('relay', role, 'audio', data.length + 'B');
-      forwardAudioFromClient(role, data);
+      forwardAudio(role, data);
       return;
     }
 
-    /* control messages (e.g. {"type":"stop"}) */
+    /* control messages: e.g. {"type":"stop"} */
     const msg = JSON.parse(data.toString());
     dbg('relay', role, msg);
-    if (msg.type === 'stop') flushUtterance(role);
+    if (msg.type === 'stop') sendCommit(role);
   });
 
   socket.on('close', () => {
@@ -88,10 +88,11 @@ clientWss.on('connection', socket => {
   socket.on('error', err => dbg('relay-socket', role ?? 'unknown', err));
 });
 
-/* ──────────────── helpers ──────────────── */
-function forwardAudioFromClient(role, buffer) {
+/* ───────────── misc helpers ───────────── */
+function forwardAudio(role, buffer) {
   const target = role === 'alice' ? A2B : B2A;
-  dbg('forward', `${role} → ${target === A2B ? 'A2B' : 'B2A'}`, buffer.length + 'B');
+  dbg('forward', `${role} → ${target === A2B ? 'A2B' : 'B2A'}`,
+      buffer.length + 'B');
   target.send(
     JSON.stringify({
       type:  'input_audio_buffer.append',
@@ -100,43 +101,53 @@ function forwardAudioFromClient(role, buffer) {
   );
 }
 
-/* Fix: do NOT clear the buffer here – commit + create is enough */
-function flushUtterance(role) {
+/* Send COMMIT only; response.create will be sent after ACK arrives */
+function sendCommit(role) {
   const target = role === 'alice' ? A2B : B2A;
-  ['input_audio_buffer.commit', 'response.create'].forEach(t => {
-    dbg('flush', role, t);
-    target.send(JSON.stringify({ type: t }));
-  });
+  dbg('flush', role, 'input_audio_buffer.commit');
+  target.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
 }
 
-/* OpenAI → other browser */
+/* Wire AI websocket ↔ other browser */
 function wire(aiWs, aiName, otherSock, otherName) {
   let chunk = 0;
 
   aiWs.on('message', raw => {
     const msg = JSON.parse(raw.toString());
 
-    /* audio stream from OpenAI */
-    if (msg.type === 'output_audio_chunk') {
-      dbg(aiName, `audio-chunk #${chunk++} len=${msg.audio.length}`);
-      const sock = otherSock();
-      if (sock?.readyState === WebSocket.OPEN)
-        sock.send(Buffer.from(msg.audio, 'base64'), { binary: true });
+    /* 1. OpenAI confirms that the buffer is committed — now ask for answer */
+    if (msg.type === 'input_audio_buffer.committed') {
+      dbg(aiName, 'buffer committed → response.create');
+      aiWs.send(JSON.stringify({ type: 'response.create' }));
+      return;
     }
 
-    /* caption text stream */
-    if (msg.type === 'assistant_response_chunk') {
-      dbg(aiName, `text: "${msg.text}"`);
+    /* 2. Streamed audio coming back from the model */
+    if (msg.type === 'output_audio_chunk') {
       const sock = otherSock();
+      dbg(aiName, `audio-chunk #${chunk++} len=${msg.audio.length}`);
+      if (sock?.readyState === WebSocket.OPEN)
+        sock.send(Buffer.from(msg.audio, 'base64'), { binary: true });
+      return;
+    }
+
+    /* 3. Streamed text coming back from the model */
+    if (msg.type === 'assistant_response_chunk') {
+      const sock = otherSock();
+      dbg(aiName, `text: "${msg.text}"`);
       if (sock?.readyState === WebSocket.OPEN)
         sock.send(JSON.stringify({ caption: msg.text }));
 
-      /* optional: clear the buffer when the answer is finished */
-      if (msg.final) {                // ← field name may differ; adapt if needed
-        dbg(aiName, 'assistant finished → clear buffer');
+      /* when the answer is complete we can clear the buffer */
+      if (msg.final) {
+        dbg(aiName, 'assistant finished → input_audio_buffer.clear');
         aiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
       }
+      return;
     }
+
+    /* 4. Anything else – log for diagnostics */
+    dbg(aiName, 'unhandled', msg);
   });
 
   aiWs.on('error', err => dbg(aiName, 'ERR', err));
@@ -146,5 +157,5 @@ function wire(aiWs, aiName, otherSock, otherName) {
 wire(A2B, 'A2B', () => bobSocket,   'bob');
 wire(B2A, 'B2A', () => aliceSocket, 'alice');
 
-/* ───────────── start server ───────────── */
+/* ───────────── start HTTP server ───────────── */
 server.listen(3000, () => console.log('http://localhost:3000'));
