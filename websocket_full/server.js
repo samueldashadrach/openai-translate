@@ -4,16 +4,16 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import WebSocket from 'ws';
 
-/* ─────────────── misc helpers ─────────────── */
+/* ───────────── helpers ───────────── */
 const ts  = () => new Date().toISOString();
 const dbg = (tag, ...m) => console.log(ts(), `[${tag}]`, ...m);
 
-/* ───────────── HTTP + static files ───────────── */
+/* ───────────── HTTP server ───────────── */
 const app    = express();
 const server = http.createServer(app);
 app.use(express.static('public'));
 
-/* ───────────── OpenAI realtime sockets ───────────── */
+/* ───────────── OpenAI realtime wiring ───────────── */
 const OPENAI_URL =
   'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17';
 
@@ -22,42 +22,82 @@ const HEADERS = {
   'OpenAI-Beta': 'realtime=v1'
 };
 
-function openAiSession(name, prompt) {
+/* Create / recreate a realtime session and wire it up */
+function connectAi(name, prompt, getOtherSock, otherName) {
   const ws = new WebSocket(OPENAI_URL, { headers: HEADERS });
 
   ws.on('open', () => {
     dbg(name, 'OPEN');
+
+    /* 1. tell the server what audio we will send / expect back */
+    ws.send(
+      JSON.stringify({
+        type: 'audio_config.set',
+        audio_format: { type: 'linear16', sample_rate: 16000, channels: 1 }
+      })
+    );
+    ws.send(
+      JSON.stringify({
+        type: 'response_format.set',
+        response_format: { type: 'pcm', sample_rate: 16000 }
+      })
+    );
+
+    /* 2. system prompt */
     ws.send(
       JSON.stringify({ type: 'system_message.create', content: prompt })
     );
   });
 
-  ws.on('error', err => dbg(name, 'ERR', err));
-  ws.on('close', () => dbg(name, 'CLOSED'));
+  /* ------------------------------------------------------------------ */
+  let chunk = 0;
+
+  ws.on('message', raw => {
+    const msg = JSON.parse(raw.toString());
+
+    if (msg.type === 'output_audio_chunk') {
+      dbg(name, `audio-chunk #${chunk++} len=${msg.audio.length}`);
+      const sock = getOtherSock();
+      if (sock?.readyState === WebSocket.OPEN)
+        sock.send(Buffer.from(msg.audio, 'base64'), { binary: true });
+      return;
+    }
+
+    if (msg.type === 'assistant_response_chunk') {
+      dbg(name, `text: "${msg.text}"`);
+      const sock = getOtherSock();
+      if (sock?.readyState === WebSocket.OPEN)
+        sock.send(JSON.stringify({ caption: msg.text }));
+      return;
+    }
+
+    /* Any other server messages – just log them so we see errors. */
+    if (msg.type !== 'ping') dbg(name, 'unhandled', msg);
+  });
+
+  ws.on('close', (code, reason) => {
+    dbg(name, 'CLOSED', code, reason.toString());
+    /* Re-establish the session after 1 s so the relay keeps working. */
+    setTimeout(
+      () => (sessions[name] = connectAi(name, prompt, getOtherSock, otherName)),
+      1000
+    );
+  });
+
+  ws.on('error', err => dbg(name, 'ERR', err.message));
+
   return ws;
 }
-
-const A2B = openAiSession(
-  'A2B',
-  'You are a real-time interpreter. Input language: English. '
-  + 'Output language: Spanish. Respond ONLY with translated speech and text.'
-);
-
-const B2A = openAiSession(
-  'B2A',
-  'You are a real-time interpreter. Input language: Spanish. '
-  + 'Output language: English. Respond ONLY with translated speech and text.'
-);
 
 /* ───────────── browser ↔ relay socket ───────────── */
 const clientWss = new WebSocketServer({ server });
 let aliceSocket, bobSocket;
 
 clientWss.on('connection', socket => {
-  let role;                       // "alice" | "bob"
+  let role; // "alice" | "bob"
 
   socket.on('message', (data, isBinary) => {
-    /* first text frame = role announcement */
+    /* first text frame announces the role */
     if (!role && !isBinary) {
       role = JSON.parse(data.toString()).role;
       if (role === 'alice') aliceSocket = socket;
@@ -66,17 +106,16 @@ clientWss.on('connection', socket => {
       return;
     }
 
-    /* audio from microphone */
+    /* microphone frames arrive as binary */
     if (isBinary) {
-      dbg('relay', role, 'audio', data.length + 'B');
       forwardAudio(role, data);
       return;
     }
 
-    /* control messages: e.g. {"type":"stop"} */
+    /* control messages  (currently only {"type":"stop"}) */
     const msg = JSON.parse(data.toString());
     dbg('relay', role, msg);
-    if (msg.type === 'stop') sendCommit(role);
+    if (msg.type === 'stop') flushUtterance(role);
   });
 
   socket.on('close', () => {
@@ -88,74 +127,51 @@ clientWss.on('connection', socket => {
   socket.on('error', err => dbg('relay-socket', role ?? 'unknown', err));
 });
 
-/* ───────────── misc helpers ───────────── */
-function forwardAudio(role, buffer) {
-  const target = role === 'alice' ? A2B : B2A;
-  dbg('forward', `${role} → ${target === A2B ? 'A2B' : 'B2A'}`,
-      buffer.length + 'B');
-  target.send(
-    JSON.stringify({
-      type:  'input_audio_buffer.append',
-      audio: buffer.toString('base64')
-    })
-  );
+/* ───────────── helper functions ───────────── */
+function forwardAudio(role, buf) {
+  const target = sessions[role === 'alice' ? 'A2B' : 'B2A'];
+  if (target?.readyState === WebSocket.OPEN) {
+    dbg('forward',
+        `${role} → ${target === sessions.A2B ? 'A2B' : 'B2A'}`,
+        buf.length + 'B');
+    target.send(
+      JSON.stringify({
+        type:  'input_audio_buffer.append',
+        audio: buf.toString('base64')
+      })
+    );
+  }
 }
 
-/* Send COMMIT only; response.create will be sent after ACK arrives */
-function sendCommit(role) {
-  const target = role === 'alice' ? A2B : B2A;
-  dbg('flush', role, 'input_audio_buffer.commit');
-  target.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-}
+/* At end of utterance: commit + ask for answer (no clear yet) */
+function flushUtterance(role) {
+  const target = sessions[role === 'alice' ? 'A2B' : 'B2A'];
+  if (target?.readyState !== WebSocket.OPEN) return;
 
-/* Wire AI websocket ↔ other browser */
-function wire(aiWs, aiName, otherSock, otherName) {
-  let chunk = 0;
-
-  aiWs.on('message', raw => {
-    const msg = JSON.parse(raw.toString());
-
-    /* 1. OpenAI confirms that the buffer is committed — now ask for answer */
-    if (msg.type === 'input_audio_buffer.committed') {
-      dbg(aiName, 'buffer committed → response.create');
-      aiWs.send(JSON.stringify({ type: 'response.create' }));
-      return;
-    }
-
-    /* 2. Streamed audio coming back from the model */
-    if (msg.type === 'output_audio_chunk') {
-      const sock = otherSock();
-      dbg(aiName, `audio-chunk #${chunk++} len=${msg.audio.length}`);
-      if (sock?.readyState === WebSocket.OPEN)
-        sock.send(Buffer.from(msg.audio, 'base64'), { binary: true });
-      return;
-    }
-
-    /* 3. Streamed text coming back from the model */
-    if (msg.type === 'assistant_response_chunk') {
-      const sock = otherSock();
-      dbg(aiName, `text: "${msg.text}"`);
-      if (sock?.readyState === WebSocket.OPEN)
-        sock.send(JSON.stringify({ caption: msg.text }));
-
-      /* when the answer is complete we can clear the buffer */
-      if (msg.final) {
-        dbg(aiName, 'assistant finished → input_audio_buffer.clear');
-        aiWs.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
-      }
-      return;
-    }
-
-    /* 4. Anything else – log for diagnostics */
-    dbg(aiName, 'unhandled', msg);
+  ['input_audio_buffer.commit', 'response.create'].forEach(t => {
+    dbg('flush', role, t);
+    target.send(JSON.stringify({ type: t }));
   });
-
-  aiWs.on('error', err => dbg(aiName, 'ERR', err));
-  aiWs.on('close', () => dbg(aiName, 'CLOSED'));
 }
 
-wire(A2B, 'A2B', () => bobSocket,   'bob');
-wire(B2A, 'B2A', () => aliceSocket, 'alice');
+/* ───────────── kick everything off ───────────── */
+const sessions = {};         // mutable so reconnect can overwrite entries
+
+sessions.A2B = connectAi(
+  'A2B',
+  'You are a real-time interpreter. Input: English. Output: Spanish. '
+    + 'Respond only with translated speech and text.',
+  () => bobSocket,
+  'bob'
+);
+
+sessions.B2A = connectAi(
+  'B2A',
+  'You are a real-time interpreter. Input: Spanish. Output: English. '
+    + 'Respond only with translated speech and text.',
+  () => aliceSocket,
+  'alice'
+);
 
 /* ───────────── start HTTP server ───────────── */
 server.listen(3000, () => console.log('http://localhost:3000'));
