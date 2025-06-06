@@ -6,8 +6,6 @@ const captionsDiv = document.getElementById('captions');
 
 let ws, audioCtx, processor, recording = false;
 
-/* ───────────────── connect to relay ────────────────── */
-connectBtn.onclick = () => {
   /* ───────────────── connect to relay ────────────────── */
 connectBtn.onclick = () => {
   // pick ws:// on HTTP pages, wss:// on HTTPS pages
