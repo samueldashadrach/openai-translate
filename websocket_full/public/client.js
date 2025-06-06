@@ -6,10 +6,9 @@ const captionsDiv = document.getElementById('captions');
 
 let ws, audioCtx, processor, recording = false;
 
-  /* ───────────────── connect to relay ────────────────── */
+/* ───────────────── connect to relay ────────────────── */
 connectBtn.onclick = () => {
   // pick ws:// on HTTP pages, wss:// on HTTPS pages
-
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${scheme}://${location.host}`);
   ws.binaryType = 'arraybuffer';
