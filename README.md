@@ -3,6 +3,19 @@
 # openai-translate
 
 
+This project no longer necessary.
+
+Figured out much easier solution.
+
+1. Open: Realtime API in safari openAI playground. Input: macOS mic
+2. Open: Zoom. Input: Loopback Audio. Output: macOS speaker
+3. Open: Loopback audio. Create new device. Safari 1&2 -> Channels 1&2
+
+Do this on only one side for translation one way. Do this on both sides for translation both ways.
+
+
+---
+
 server.js works with 1 computer
 
 for bidirectional, likely setup required
