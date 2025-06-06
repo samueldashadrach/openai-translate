@@ -8,9 +8,14 @@ let ws, audioCtx, processor, recording = false;
 
 /* ───────────────── connect to relay ────────────────── */
 connectBtn.onclick = () => {
-  ws = new WebSocket(`ws://${location.host}`);
+  /* ───────────────── connect to relay ────────────────── */
+connectBtn.onclick = () => {
+  // pick ws:// on HTTP pages, wss:// on HTTPS pages
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const port   = location.port ? `:${location.port}` : '';
+  ws = new WebSocket(`${scheme}://${location.hostname}${port}`);
   ws.binaryType = 'arraybuffer';
-
+  
   ws.onopen = () => {
     ws.send(JSON.stringify({ role: roleSelect.value }));
     talkBtn.disabled = false;
