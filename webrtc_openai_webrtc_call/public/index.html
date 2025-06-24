@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI-mediated WebRTC chat (debug build)</title>
+<title>AI-mediated WebRTC chat (debug-2)</title>
 
 <style>
   body  { font-family:sans-serif; text-align:center; margin-top:2em; }
@@ -43,30 +43,47 @@ joinBtn.addEventListener('click', joinRoom);
 let pcOai, pcChat, ws;               // OpenAI-PC, chat-PC, signalling WS
 let statsTimer;
 
+/* helper: wait until pc.iceGatheringState === 'complete' */
+function waitIceComplete(pc){
+  return new Promise(res=>{
+    if(pc.iceGatheringState==='complete') return res();
+    pc.addEventListener('icegatheringstatechange', function h(){
+      if(pc.iceGatheringState==='complete'){ pc.removeEventListener('icegatheringstatechange',h); res(); }
+    });
+  });
+}
+
 /* ---------- OpenAI connection ---------- */
 async function connectToOpenAI(micTrack) {
   log('Fetching ephemeral OpenAI token …');
   const { client_secret } = await (await fetch('/session')).json();
   const EPHEMERAL = client_secret.value;
 
-  pcOai = new RTCPeerConnection();
+  pcOai = new RTCPeerConnection({
+    iceServers:[{urls:'stun:stun.l.google.com:19302'}]
+  });
   pcOai.addTrack(micTrack);
   log('pcOai created, micTrack added', micTrack.id);
 
-  /* optional data-channel */
-  pcOai.createDataChannel('oai-events');
+  /* optional data-channel for transcripts / events */
+  const dc = pcOai.createDataChannel('oai-events');
+  dc.onopen    = ()=>log('oai-events DC open');
+  dc.onmessage = ev =>{
+    try{ log('oai-event', JSON.parse(ev.data)); }
+    catch{ log('oai-raw', ev.data); }
+  };
 
   pcOai.ontrack = ({ streams }) => {
     const modelStream = streams[0];
     log('<< received modelStream from OpenAI', modelStream.id);
 
-    /* turn remote → local track (AudioContext trick) */
+    /* remote → local track via AudioContext */
     const ctx  = new (window.AudioContext||window.webkitAudioContext)();
     const src  = ctx.createMediaStreamSource(modelStream);
     const dest = ctx.createMediaStreamDestination();
     src.connect(dest);
     const sendTrack = dest.stream.getAudioTracks()[0];
-    log('new local sendTrack created', sendTrack.id);
+    log('new local sendTrack', sendTrack.id);
 
     if (!pcChat){
       buildChatPC(sendTrack);
@@ -79,21 +96,24 @@ async function connectToOpenAI(micTrack) {
     }
   };
 
-  /* SDP with OpenAI */
-  const offer = await pcOai.createOffer();
-  await pcOai.setLocalDescription(offer);
-  log('Sent SDP offer to OpenAI');
+  /* SDP with OpenAI – need ICE candidates first! */
+  log('Creating SDP offer for OpenAI …');
+  await pcOai.setLocalDescription(await pcOai.createOffer());
+  await waitIceComplete(pcOai);
+  log('ICE gathering done, candidates in SDP');
 
+  const offerSdp = pcOai.localDescription.sdp;
   const ansTxt = await fetch(
     'https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03',
     { method:'POST',
       headers:{ Authorization:`Bearer ${EPHEMERAL}`,
                 'Content-Type':'application/sdp' },
-      body:offer.sdp }
+      body:offerSdp }
   ).then(r=>r.text());
+  log('Received SDP answer from OpenAI (len', ansTxt.length,')');
 
   await pcOai.setRemoteDescription({ type:'answer', sdp:ansTxt });
-  log('Received SDP answer from OpenAI');
+  log('pcOai setRemoteDescription → connected? wait for “<< modelStream …”');
 }
 
 /* ---------- browser ↔ browser ---------- */
@@ -120,13 +140,14 @@ function buildChatPC(firstTrack){
   /* periodic RTP byte counters */
   clearInterval(statsTimer);
   statsTimer = setInterval(async ()=>{
+    if(!pcChat) return;
     const stats = await pcChat.getStats();
-    let inBytes=0,outBytes=0;
+    let inB=0,outB=0;
     stats.forEach(r=>{
-      if (r.type==='inbound-rtp'  && r.kind==='audio') inBytes  += r.bytesReceived;
-      if (r.type==='outbound-rtp' && r.kind==='audio') outBytes += r.bytesSent;
+      if (r.type==='inbound-rtp'  && r.kind==='audio') inB  += r.bytesReceived;
+      if (r.type==='outbound-rtp' && r.kind==='audio') outB += r.bytesSent;
     });
-    log('RTP bytes  ▲',outBytes,'  ▼',inBytes);
+    log('RTP bytes  ▲',outB,'  ▼',inB);
   },3000);
 }
 
