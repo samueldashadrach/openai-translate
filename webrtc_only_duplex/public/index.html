@@ -5,8 +5,8 @@
 
 <style>
   body  { font-family: sans-serif; text-align: center; margin-top: 2em; }
-  input { font-size: 1.1em; }
-  button{ font-size: 1.1em; margin-left: .3em; }
+  input,button{ font-size: 1.1em; }
+  button{ margin-left:.3em; }
 </style>
 
 <h2>WebRTC voice chat (2 participants)</h2>
@@ -19,72 +19,79 @@
 <audio id="remoteAudio" autoplay playsinline></audio>
 
 <script>
-/* ---------- UI handling ---------- */
-const roomInput = document.getElementById('roomInput');
-const joinBtn   = document.getElementById('joinBtn');
+/* ---------- UI ---------- */
+const roomInput   = document.getElementById('roomInput');
+const joinBtn     = document.getElementById('joinBtn');
 const remoteAudio = document.getElementById('remoteAudio');
 
-roomInput.addEventListener('input', () => {
-  joinBtn.disabled = roomInput.value.trim() === '';
-});
+roomInput.addEventListener('input', () =>
+  joinBtn.disabled = roomInput.value.trim() === ''
+);
 joinBtn.addEventListener('click', joinRoom);
 
-/* ---------- WebRTC setup ---------- */
-const peerConnection = new RTCPeerConnection({
+/* ---------- WebRTC ---------- */
+const pc = new RTCPeerConnection({
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 });
 
-let websocket;            // will hold the signalling socket
+let ws;                // signalling socket
 
-peerConnection.onicecandidate = event => {
-  if (event.candidate && websocket?.readyState === WebSocket.OPEN) {
-    websocket.send(JSON.stringify({ ice: event.candidate }));
+pc.onicecandidate = ({candidate}) => {
+  if (candidate && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ ice: candidate }));
   }
 };
 
-peerConnection.ontrack = event => {
-  // Only audio, so the first track’s stream is enough
-  remoteAudio.srcObject = event.streams[0];
+pc.ontrack = ({streams}) => {
+  remoteAudio.srcObject = streams[0];
+  remoteAudio.play().catch(()=>{});          // ignore autoplay-blocking errors
 };
 
 async function joinRoom() {
   joinBtn.disabled = true;
 
-  // Connect to the Node.js signalling server (same host / different protocol)
-  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  websocket = new WebSocket(`${wsProtocol}://${location.host}`);
+  /* 1. Ask for mic permission right now (still in the click handler) */
+  let localStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  } catch (err) {
+    alert(
+      (location.protocol === 'https:' || location.hostname === 'localhost') ?
+        'Microphone access denied.' :
+        'Browsers block getUserMedia on non-HTTPS pages. Serve the page over HTTPS or use localhost.'
+    );
+    joinBtn.disabled = false;
+    return;
+  }
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-  websocket.addEventListener('open', async () => {
-    const roomName = roomInput.value.trim();
-    websocket.send(JSON.stringify({ join: roomName }));
+  /* 2. Connect to the signalling server */
+  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${wsProto}://${location.host}`);
 
-    // Always grab local microphone as early as possible
-    const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  ws.addEventListener('open', async () => {
+    ws.send(JSON.stringify({ join: roomInput.value.trim() }));
 
-    // Arbitrarily decide the peer without #callee hash is the offerer
-    if (location.hash !== '#callee') {
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      websocket.send(JSON.stringify({ offer }));
+    if (location.hash !== '#callee') {        // we’re the offerer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ offer }));
     }
   });
 
-  websocket.addEventListener('message', async ({ data }) => {
-    const message = JSON.parse(data);
+  ws.addEventListener('message', async ({data}) => {
+    const msg = JSON.parse(data);
 
-    if (message.offer) {
-      await peerConnection.setRemoteDescription(message.offer);
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      websocket.send(JSON.stringify({ answer }));
-      location.hash = '#callee';             // mark this tab as the callee
-    }
-    else if (message.answer) {
-      await peerConnection.setRemoteDescription(message.answer);
-    }
-    else if (message.ice) {
-      try { await peerConnection.addIceCandidate(message.ice); } catch (err) { /* ignore dupes */ }
+    if (msg.offer) {
+      await pc.setRemoteDescription(msg.offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ answer }));
+      location.hash = '#callee';
+    } else if (msg.answer) {
+      await pc.setRemoteDescription(msg.answer);
+    } else if (msg.ice) {
+      try { await pc.addIceCandidate(msg.ice); } catch(e){}
     }
   });
 }
