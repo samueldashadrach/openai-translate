@@ -1,7 +1,41 @@
-2025-06-05
+2025-06-24
 
 # openai-translate
 
+rogue amoeba loopback solution does not work on iphone, only mac, figuring out alternative solution for iphone
+
+2025-06-24T11:50 start
+
+options for iphone
+yes
+ - jailbreak the phone lol. run linux on it instead of ios.
+   - not tried but almost certainly works.
+
+ - connect iphone using cable to macbook. run loopback on mac with iphone audio as input. video call runs on mac.
+   - tried, works.
+ - connect iphone to macbook using same wifi. run loopback on mac with iphone audio as input. video call runs on mac.
+   - tried, works.
+
+maybe
+ - dont work with existing video call apps. write your iphone app that connects to openai webrtc, then pipes it to your own voice call (may or may not be webrtc)
+   - do this as a webapp instead of app?
+
+
+ - cable two phones together
+
+no
+ - audiobus, apematrix etc - does not work, because regular video call don't expose themselves as an endpoint for this app to hook
+   - o3 says android does not support piping audio from an app to a video call app either
+
+
+
+
+
+
+
+
+
+---
 
 This project no longer necessary.
 

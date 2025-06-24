@@ -34,7 +34,7 @@ const pc = new RTCPeerConnection({
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 });
 
-let ws;                // signalling socket
+let ws;                         // signalling socket
 
 pc.onicecandidate = ({candidate}) => {
   if (candidate && ws?.readyState === WebSocket.OPEN) {
@@ -42,37 +42,32 @@ pc.onicecandidate = ({candidate}) => {
   }
 };
 
-pc.ontrack = ({streams}) => {
+pc.ontrack = ({streams}) => {              // incoming audio
   remoteAudio.srcObject = streams[0];
-  remoteAudio.play().catch(()=>{});          // ignore autoplay-blocking errors
 };
 
 async function joinRoom() {
   joinBtn.disabled = true;
 
-  /* 1. Ask for mic permission right now (still in the click handler) */
+  /* 1. Microphone permission */
   let localStream;
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio:true });
   } catch (err) {
-    alert(
-      (location.protocol === 'https:' || location.hostname === 'localhost') ?
-        'Microphone access denied.' :
-        'Browsers block getUserMedia on non-HTTPS pages. Serve the page over HTTPS or use localhost.'
-    );
+    alert('Need microphone access to continue.');
     joinBtn.disabled = false;
     return;
   }
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-  /* 2. Connect to the signalling server */
-  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${wsProto}://${location.host}`);
+  /* 2. Open WebSocket on /ws (nginx will forward it) */
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.addEventListener('open', async () => {
     ws.send(JSON.stringify({ join: roomInput.value.trim() }));
 
-    if (location.hash !== '#callee') {        // we’re the offerer
+    if (location.hash !== '#callee') {      // we are offerer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       ws.send(JSON.stringify({ offer }));
@@ -91,7 +86,7 @@ async function joinRoom() {
     } else if (msg.answer) {
       await pc.setRemoteDescription(msg.answer);
     } else if (msg.ice) {
-      try { await pc.addIceCandidate(msg.ice); } catch(e){}
+      try { await pc.addIceCandidate(msg.ice); } catch(_) {}
     }
   });
 }
