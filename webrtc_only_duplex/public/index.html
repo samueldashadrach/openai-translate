@@ -1,4 +1,3 @@
-<!-- public/index.html -->
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tiny WebRTC Voice Chat</title>
@@ -74,8 +73,21 @@ async function joinRoom() {
     }
   });
 
-  ws.addEventListener('message', async ({data}) => {
-    const msg = JSON.parse(data);
+  ws.addEventListener('message', async ev => {
+    let data = ev.data;
+
+    /* Safari / some browsers could deliver a Blob for binary frames */
+    if (typeof data !== 'string') {
+      if (data instanceof Blob) {
+        data = await data.text();
+      } else {
+        return;               // unknown format – ignore
+      }
+    }
+
+    let msg;
+    try { msg = JSON.parse(data); }
+    catch { return; }
 
     if (msg.offer) {
       await pc.setRemoteDescription(msg.offer);

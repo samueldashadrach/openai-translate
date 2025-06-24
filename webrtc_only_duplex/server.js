@@ -1,12 +1,10 @@
-// server.js
-//
 // 1. npm install ws
 // 2. node server.js
 //
 // ────────────────────────────────────────────────
 //  • Listens on http://localhost:3000
-//  • Static files  →  GET /…
-//  • WebSocket     →  WS /ws           (nginx will proxy-pass that)
+//  • Static files  →  GET /…   (served from /public)
+//  • WebSocket     →  WS  /ws  (nginx proxies this)
 // ────────────────────────────────────────────────
 
 const http      = require('http');
@@ -37,9 +35,12 @@ wss.on('connection', socket => {
   let joinedRoom = null;
 
   socket.on('message', raw => {
-    const msg = JSON.parse(raw);
+    // raw may be a Buffer – convert to string first
+    let msg;
+    try { msg = JSON.parse(raw.toString()); }
+    catch { return; }                   // ignore malformed data
 
-    // First message must be { join: "roomName" }
+    /* First message must be { join:"room" } */
     if (msg.join) {
       joinedRoom = msg.join;
       if (!rooms.has(joinedRoom)) rooms.set(joinedRoom, []);
@@ -47,12 +48,13 @@ wss.on('connection', socket => {
       return;
     }
 
-    // Forward everything else to the other peer in the room
+    /* Forward everything else to the other peer in the room */
     if (joinedRoom) {
       const peers = rooms.get(joinedRoom) || [];
+      const payload = JSON.stringify(msg);   // <- ALWAYS send text
       peers.forEach(peer => {
         if (peer !== socket && peer.readyState === WebSocket.OPEN) {
-          peer.send(raw);
+          peer.send(payload);
         }
       });
     }
