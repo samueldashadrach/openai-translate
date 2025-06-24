@@ -1,4 +1,5 @@
 <!doctype html>
+<html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI-mediated WebRTC chat</title>
 
@@ -11,13 +12,13 @@
 
 <h2>GPT-4o talks only to the remote peer</h2>
 <p>
- Room:
- <input id="roomInput" placeholder="choose-a-room">
- <button id="joinBtn" disabled>Join</button>
+  Room:
+  <input id="roomInput" placeholder="choose-a-room">
+  <button id="joinBtn" disabled>Join</button>
 </p>
 
 <audio id="remoteAudio" autoplay playsinline></audio>
-<pre   id="log"></pre>
+<pre id="log"></pre>
 
 <script>
 /* ───────── logger ───────── */
@@ -37,28 +38,35 @@ joinBtn.onclick = joinRoom;
 
 /* ───────── globals ───────── */
 let pcOai, pcChat, ws, relayCtx, statsTimer;
-const keepAliveNodes = [];                 // stops GC
+const keepAliveNodes = [];                 // prevents GC of Web-Audio nodes
 
-/* helper: wait until iceGatheringState === "complete" */
+/* helper: await ICE gathering */
 const waitIce = pc => new Promise(res=>{
-  if(pc.iceGatheringState === 'complete') return res();
+  if (pc.iceGatheringState === 'complete') return res();
   pc.addEventListener('icegatheringstatechange', function h(){
-    if(pc.iceGatheringState === 'complete'){
+    if (pc.iceGatheringState === 'complete'){
       pc.removeEventListener('icegatheringstatechange', h); res();
     }
   });
 });
 
-/* helper: robust play() with a few retries */
-function ensurePlay(elem, n = 0){
-  elem.play().then(()=>log('audio playing'))
-             .catch(e=>{
-               log('play() failed', e.name);
-               if(n < 4) setTimeout(()=>ensurePlay(elem, n+1), 250);
-             });
+/* helper: robust play() with retries + visibility awareness */
+function ensurePlay(el, n = 0){
+  el.play()
+    .then(()=>log('audio playing'))
+    .catch(err=>{
+      if (document.visibilityState === 'hidden') {
+        const h = ()=>{ document.removeEventListener('visibilitychange', h);
+                        ensurePlay(el, n); };
+        document.addEventListener('visibilitychange', h);
+        return;
+      }
+      if (n < 5) setTimeout(()=>ensurePlay(el, n+1), 350);
+      else log('⚠️  autoplay failed', err.name);
+    });
 }
 
-/* ───────── OpenAI PC ───────── */
+/* ───────── OpenAI peer connection ───────── */
 async function connectToOpenAI(micTrack){
   log('Fetching token …');
   const { client_secret } = await (await fetch('/session')).json();
@@ -68,26 +76,31 @@ async function connectToOpenAI(micTrack){
   pcOai.addTrack(micTrack);
 
   pcOai.createDataChannel('oai-events').onmessage = ev=>{
-    try{ log('oai-event', JSON.parse(ev.data)); }catch{ log('oai-raw', ev.data); }
+    try   { log('oai-event', JSON.parse(ev.data)); }
+    catch { log('oai-raw',  ev.data); }
   };
 
+  /*
+   * Route model speech ONLY to the remote peer,
+   * never to local speakers (avoids loop-back / echo).
+   */
   pcOai.ontrack = ({streams})=>{
-    const modelStream = streams[0];
-    log('<< modelStream', modelStream.id);
+    const srcStream = streams[0];
+    log('<< modelStream', srcStream.id);
 
-    /* turn remote → local */
-    const src = relayCtx.createMediaStreamSource(modelStream);
-    const dst = relayCtx.createMediaStreamDestination();
-    src.connect(dst);
-    keepAliveNodes.push(src, dst);           // prevent GC
-    const localTrack = dst.stream.getAudioTracks()[0];
+    const srcNode = relayCtx.createMediaStreamSource(srcStream);
+    const dstNode = relayCtx.createMediaStreamDestination();
+    srcNode.connect(dstNode);
+    keepAliveNodes.push(srcNode, dstNode);
 
-    if(!pcChat){
-      buildChatPC(localTrack);
-      if(ws?.readyState === 1) negotiateChat();
-    }else{
+    const aiTrack = dstNode.stream.getAudioTracks()[0];
+
+    if (!pcChat){
+      buildChatPC(aiTrack);
+      ws?.readyState === 1 && negotiateChat();
+    } else {
       const sender = pcChat.getSenders().find(s=>s.track?.kind==='audio');
-      sender ? sender.replaceTrack(localTrack) : pcChat.addTrack(localTrack);
+      sender ? sender.replaceTrack(aiTrack) : pcChat.addTrack(aiTrack);
     }
   };
 
@@ -96,35 +109,38 @@ async function connectToOpenAI(micTrack){
 
   const answerSDP = await fetch(
     'https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03',
-    {method:'POST',
-     headers:{Authorization:`Bearer ${TOKEN}`,'Content-Type':'application/sdp'},
-     body:pcOai.localDescription.sdp}).then(r=>r.text());
+    {
+      method : 'POST',
+      headers: { Authorization:`Bearer ${TOKEN}`, 'Content-Type':'application/sdp' },
+      body   : pcOai.localDescription.sdp
+    }
+  ).then(r=>r.text());
 
   await pcOai.setRemoteDescription({type:'answer', sdp:answerSDP});
   log('OpenAI SDP done');
 }
 
-/* ───────── browser ↔ browser PC ───────── */
+/* ───────── browser ↔ browser connection ───────── */
 function buildChatPC(firstTrack){
   pcChat = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
   const sender = pcChat.addTrack(firstTrack);
   log('pcChat addTrack', firstTrack.id);
 
-  /* enable Opus-DTX so silence ≈ zero bytes */
+  /* Enable OPUS-DTX so silence is almost free */
   try{
     const p = sender.getParameters();
     (p.encodings||[]).forEach(e=>e.dtx='enabled'); sender.setParameters(p);
   }catch{}
 
   pcChat.onicecandidate = ({candidate})=>{
-    candidate && ws?.readyState===1 && ws.send(JSON.stringify({ice:candidate}));
+    candidate && ws?.readyState === 1 && ws.send(JSON.stringify({ice:candidate}));
   };
 
   pcChat.ontrack = ({track, streams})=>{
     log('>> ontrack', track.id);
     remoteAudio.srcObject = streams[0];
     remoteAudio.muted = false;
-    ensurePlay(remoteAudio);                // second play() after real stream
+    remoteAudio.oncanplay = ()=>ensurePlay(remoteAudio);
   };
 
   clearInterval(statsTimer);
@@ -132,15 +148,15 @@ function buildChatPC(firstTrack){
     const stats = await pcChat.getStats();
     let inB = 0, outB = 0;
     stats.forEach(r=>{
-      if(r.type==='inbound-rtp' && r.kind==='audio')  inB  += r.bytesReceived;
-      if(r.type==='outbound-rtp'&& r.kind==='audio')  outB += r.bytesSent;
+      if (r.type==='inbound-rtp'  && r.kind==='audio') inB  += r.bytesReceived;
+      if (r.type==='outbound-rtp' && r.kind==='audio') outB += r.bytesSent;
     });
     log('RTP bytes ▲', outB, ' ▼', inB);
   }, 3000);
 }
 
 async function negotiateChat(){
-  if(!pcChat) return;
+  if (!pcChat) return;
   await pcChat.setLocalDescription(await pcChat.createOffer());
   ws.send(JSON.stringify({offer: pcChat.localDescription}));
 }
@@ -150,45 +166,54 @@ async function joinRoom(){
   joinBtn.disabled = true;
   log('joinRoom pressed');
 
-  /* 1. mic permission */
+  /* 1) mic permission */
   let localStream;
   try{
-    localStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:true, noiseSuppression:true }
+    });
     log('mic permission granted');
   }catch{
-    alert('Need microphone access'); joinBtn.disabled = false; return;
+    alert('Need microphone access');
+    return joinBtn.disabled = false;
   }
   const micTrack = localStream.getAudioTracks()[0];
 
-  /* 2. shared AudioContext */
+  /* 2) shared AudioContext */
   relayCtx = new (window.AudioContext||window.webkitAudioContext)();
-  if(relayCtx.state==='suspended') await relayCtx.resume();
+  if (relayCtx.state === 'suspended') await relayCtx.resume();
+  document.addEventListener('visibilitychange', ()=>{
+    if (relayCtx.state === 'suspended') relayCtx.resume();
+  });
   log('AudioContext state:', relayCtx.state);
 
-  /* 3. prime <audio> during the user click */
+  /* 3) prime <audio> element inside user-gesture */
   remoteAudio.muted     = true;
   remoteAudio.srcObject = new MediaStream();
-  await remoteAudio.play().catch(()=>{});   // OK if it fails while muted
+  await remoteAudio.play().catch(()=>{});
 
-  /* 4. OpenAI & signalling in parallel */
+  /* 4) OpenAI + signalling in parallel */
   connectToOpenAI(micTrack).catch(console.error);
 
-  ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+  ws = new WebSocket(
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
+  );
   ws.onopen = ()=>{
-    ws.send(JSON.stringify({join:roomInput.value.trim()}));
+    ws.send(JSON.stringify({join: roomInput.value.trim()}));
     negotiateChat();
   };
-  ws.onmessage = async ev =>{
-    const msg = JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text());
-    if(msg.offer){
+  ws.onmessage = async ev=>{
+    const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text());
+    if (msg.offer){
       await pcChat.setRemoteDescription(msg.offer);
       await pcChat.setLocalDescription(await pcChat.createAnswer());
-      ws.send(JSON.stringify({answer:pcChat.localDescription}));
-    }else if(msg.answer){
+      ws.send(JSON.stringify({answer: pcChat.localDescription}));
+    } else if (msg.answer){
       await pcChat.setRemoteDescription(msg.answer);
-    }else if(msg.ice){
-      try{ await pcChat.addIceCandidate(msg.ice); }catch{}
+    } else if (msg.ice){
+      try { await pcChat.addIceCandidate(msg.ice); } catch{}
     }
   };
 }
 </script>
+</html>
