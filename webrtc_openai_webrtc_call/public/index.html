@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI-mediated WebRTC chat (events + audio fixed)</title>
+<title>AI-mediated WebRTC chat (robust play)</title>
 
 <style>
   body{font-family:sans-serif;text-align:center;margin-top:2em}
@@ -28,10 +28,8 @@
 <script>
 /* ---------- tiny logger ---------- */
 const logEl=document.getElementById('log');
-function log(...a){
-  const t=a.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ');
-  console.log('[DBG]',...a); logEl.textContent+=t+'\n';
-}
+function log(...a){const t=a.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ');
+  console.log('[DBG]',...a); logEl.textContent+=t+'\n';}
 
 /* ---------- UI ---------- */
 const roomInput   =document.getElementById('roomInput');
@@ -49,7 +47,7 @@ let pcOai,pcChat,ws,statsTimer,relayCtx;
 /* helper: wait for ICE complete */
 const waitIce=pc=>new Promise(r=>{
   if(pc.iceGatheringState==='complete') return r();
-  pc.addEventListener('icegatheringstatechange', function h(){
+  pc.addEventListener('icegatheringstatechange',function h(){
     if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',h);r();}
   });
 });
@@ -64,13 +62,11 @@ async function connectToOpenAI(micTrack){
   pcOai.addTrack(micTrack);
   log('pcOai created, mic added', micTrack.id);
 
-  /* data-channel for realtime events (restored) */
+  /* data-channel for events */
   const dc=pcOai.createDataChannel('oai-events');
   dc.onopen   =()=>log('oai-events DC open');
-  dc.onmessage=ev=>{
-    try{log('oai-event',JSON.parse(ev.data));}
-    catch{log('oai-raw',ev.data);}
-  };
+  dc.onmessage=ev=>{try{log('oai-event',JSON.parse(ev.data));}
+                    catch{log('oai-raw',ev.data);}};
 
   /* when model speaks */
   pcOai.ontrack=({streams})=>{
@@ -102,6 +98,20 @@ async function connectToOpenAI(micTrack){
   log('OpenAI SDP done – waiting for media');
 }
 
+/* ---------- helper to start playback, retry on Abort ---------- */
+function retryPlay(elem,attempt=0){
+  elem.play().then(()=>log('remoteAudio playing'))
+              .catch(e=>{
+    if(e.name==='AbortError' && attempt<5){     // frames not ready yet
+      setTimeout(()=>retryPlay(elem,attempt+1),200);
+    }else if(e.name==='NotAllowedError'){
+      log('autoplay blocked'); unmuteBadge.hidden=false;
+    }else{
+      log('play() failed',e.name);
+    }
+  });
+}
+
 /* ---------- peer-to-peer chat ---------- */
 function buildChatPC(firstTrack){
   pcChat=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
@@ -114,9 +124,10 @@ function buildChatPC(firstTrack){
 
   pcChat.ontrack=({track,streams})=>{
     log('>> ontrack',track.id);
+    remoteAudio.pause();                 // stop dummy playback
     remoteAudio.srcObject=streams[0];
     remoteAudio.muted=false;
-    remoteAudio.play().catch(e=>{log('autoplay blocked',e.name);unmuteBadge.hidden=false;});
+    retryPlay(remoteAudio);
   };
 
   clearInterval(statsTimer);
@@ -143,8 +154,10 @@ async function joinRoom(){
   relayCtx=new (window.AudioContext||window.webkitAudioContext)();
   await relayCtx.resume(); log('AudioContext resumed');
 
-  /* prime audio element */
-  remoteAudio.muted=true; try{remoteAudio.play();}catch{}
+  /* prime <audio> with dummy silent stream so autoplay is “granted” */
+  remoteAudio.muted=true;
+  remoteAudio.srcObject=new MediaStream();
+  try{await remoteAudio.play();}catch{}
 
   /* mic */
   let localStream;
