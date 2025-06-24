@@ -52,11 +52,18 @@ async function connectToOpenAI(micTrack) {
   pcOai.ontrack = ({ streams }) => {
     const modelStream = streams[0];
 
-    /* clone the track – we will forward the clone only */
-    const sendTrack = modelStream.getAudioTracks()[0].clone();
+    /* -----------------------------------------------------------
+       FIX ⇢  turn the *remote* track into a brand-new *local* one
+       that we are allowed to transmit over another RTCPeerConnection.
+       ----------------------------------------------------------- */
+    const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+    const src  = ctx.createMediaStreamSource(modelStream);
+    const dest = ctx.createMediaStreamDestination();
+    src.connect(dest);
+    const sendTrack = dest.stream.getAudioTracks()[0];   // local track ✔
 
     if (!pcChat) {
-      buildChatPC(sendTrack);               // first time → create chat PC
+      buildChatPC(sendTrack);            // create the chat connection now
       if (ws && ws.readyState === WebSocket.OPEN) negotiateChat();
     } else {
       // replace existing outbound audio
@@ -100,13 +107,13 @@ function buildChatPC(firstTrack) {
   };
   pcChat.ontrack = ({ streams }) => {
     remoteAudio.srcObject = streams[0];
-    remoteAudio.play().catch(()=>{});       // best effort
+    remoteAudio.play().catch(()=>{});     // autoplay best-effort
   };
 }
 
 async function negotiateChat() {
   if (!pcChat) return;
-  if (location.hash !== '#callee') {        // we are the offerer
+  if (location.hash !== '#callee') {      // we are the offerer
     const offer = await pcChat.createOffer();
     await pcChat.setLocalDescription(offer);
     ws.send(JSON.stringify({ offer }));
@@ -136,7 +143,7 @@ async function joinRoom() {
   ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
     ws.send(JSON.stringify({ join:roomInput.value.trim() }));
-    negotiateChat();                          // in case pcChat already exists
+    negotiateChat();                      // in case pcChat already exists
   };
 
   ws.onmessage = async ev => {
