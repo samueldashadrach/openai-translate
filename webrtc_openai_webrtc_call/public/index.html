@@ -1,16 +1,10 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI-mediated WebRTC chat (complete script)</title>
+<title>AI-mediated WebRTC chat (simple-autoplay version)</title>
 
 <style>
   body{font-family:sans-serif;text-align:center;margin-top:2em}
-  input,button{font-size:1.05em} button{margin-left:.3em}
-  #clickToUnmute{
-    position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);
-    background:#000d;color:#fff;padding:.6em 1.2em;border-radius:9999px;
-    cursor:pointer;z-index:1000
-  }
-  #clickToUnmute[hidden]{display:none}
+  input,button{font-size:1.05em}  button{margin-left:.3em}
   pre{max-width:90%;margin:1em auto;background:#f3f3f3;
       padding:.7em;text-align:left}
 </style>
@@ -23,7 +17,6 @@
 </p>
 
 <audio id="remoteAudio" autoplay playsinline></audio>
-<div id="clickToUnmute" hidden>🔊 Tap to un-mute</div>
 <pre id="log"></pre>
 
 <script>
@@ -38,22 +31,12 @@ function log(...a){
 const roomInput   = document.getElementById('roomInput');
 const joinBtn     = document.getElementById('joinBtn');
 const remoteAudio = document.getElementById('remoteAudio');
-const unmuteBadge = document.getElementById('clickToUnmute');
 
-/* enable / disable Join button */
-function updateBtn(){
-  joinBtn.disabled = roomInput.value.trim() === '';
-}
+function updateBtn(){ joinBtn.disabled = roomInput.value.trim() === ''; }
 roomInput.addEventListener('input',  updateBtn);
 roomInput.addEventListener('change', updateBtn);
 updateBtn();
-
-joinBtn.onclick   = joinRoom;
-unmuteBadge.onclick = () =>{
-  remoteAudio.muted = false;
-  remoteAudio.play();
-  unmuteBadge.hidden = true;
-};
+joinBtn.onclick = joinRoom;
 
 /* ───────── globals ───────── */
 let pcOai, pcChat, ws, relayCtx, statsTimer;
@@ -80,7 +63,7 @@ async function connectToOpenAI(micTrack){
   pcOai.addTrack(micTrack);
   log('pcOai created, mic added', micTrack.id);
 
-  /* data-channel for realtime events */
+  /* optional data-channel for transcripts / events */
   const dc = pcOai.createDataChannel('oai-events');
   dc.onopen    = ()=>log('oai-events DC open');
   dc.onmessage = ev =>{
@@ -88,12 +71,12 @@ async function connectToOpenAI(micTrack){
     catch{ log('oai-raw', ev.data); }
   };
 
-  /* when model sends audio */
-  pcOai.ontrack = ({streams}) =>{
+  /* when the model sends audio back */
+  pcOai.ontrack = ({streams})=>{
     const modelStream = streams[0];
     log('<< modelStream', modelStream.id);
 
-    /* convert remote → local via running AudioContext */
+    /* convert remote → local via shared AudioContext */
     const src = relayCtx.createMediaStreamSource(modelStream);
     const dst = relayCtx.createMediaStreamDestination();
     src.connect(dst);
@@ -122,20 +105,6 @@ async function connectToOpenAI(micTrack){
   log('OpenAI SDP done – waiting for media');
 }
 
-/* ───────── helper: play() with retry ───────── */
-function retryPlay(elem, attempt = 0){
-  elem.play().then(()=>log('remoteAudio playing'))
-             .catch(e=>{
-    if(e.name === 'AbortError' && attempt < 5){
-      setTimeout(()=>retryPlay(elem, attempt+1), 200);
-    }else if(e.name === 'NotAllowedError'){
-      log('autoplay blocked'); unmuteBadge.hidden = false;
-    }else{
-      log('play() failed', e.name);
-    }
-  });
-}
-
 /* ───────── browser ↔ browser PC ───────── */
 function buildChatPC(firstTrack){
   pcChat = new RTCPeerConnection({
@@ -151,10 +120,8 @@ function buildChatPC(firstTrack){
 
   pcChat.ontrack = ({track, streams})=>{
     log('>> ontrack', track.id);
-    remoteAudio.pause();
-    remoteAudio.srcObject = streams[0];
-    remoteAudio.muted = false;
-    retryPlay(remoteAudio);
+    remoteAudio.srcObject = streams[0];   // audio element already “playing”
+    remoteAudio.muted = false;            // un-mute once real media arrives
   };
 
   clearInterval(statsTimer);
@@ -170,6 +137,7 @@ function buildChatPC(firstTrack){
 }
 
 async function negotiateChat(){
+  if(!pcChat) return;
   await pcChat.setLocalDescription(await pcChat.createOffer());
   ws.send(JSON.stringify({offer: pcChat.localDescription}));
 }
@@ -179,7 +147,7 @@ async function joinRoom(){
   joinBtn.disabled = true;
   log('joinRoom pressed');
 
-  /* 1. mic permission first */
+  /* 1. mic permission */
   let localStream;
   try{
     localStream = await navigator.mediaDevices.getUserMedia({audio:true});
@@ -189,15 +157,16 @@ async function joinRoom(){
   }
   const micTrack = localStream.getAudioTracks()[0];
 
-  /* 2. create and resume AudioContext */
+  /* 2. create / resume shared AudioContext */
   relayCtx = new (window.AudioContext||window.webkitAudioContext)();
   if(relayCtx.state === 'suspended') await relayCtx.resume();
-  log('AudioContext state:', relayCtx.state);   // running / interrupted
+  log('AudioContext state:', relayCtx.state);
 
-  /* 3. prime <audio> so autoplay is unlocked */
-  remoteAudio.muted = true;
-  remoteAudio.srcObject = new MediaStream();
-  try{ await remoteAudio.play(); }catch{}
+  /* 3. prime the <audio> element once – this single user-gesture is enough
+        for autoplay on every modern browser */
+  remoteAudio.muted     = true;             // muted ⇒ autoplay allowed
+  remoteAudio.srcObject = new MediaStream(); // empty stream is OK
+  remoteAudio.play().catch(()=>{});          // fire-and-forget
 
   /* 4. kick off OpenAI PC & signalling in parallel */
   connectToOpenAI(micTrack).catch(console.error);
@@ -205,7 +174,7 @@ async function joinRoom(){
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss':'ws'}://${location.host}/ws`);
   ws.onopen = ()=>{
     ws.send(JSON.stringify({join: roomInput.value.trim()}));
-    negotiateChat();
+    negotiateChat();            // might be ignored if pcChat not built yet
   };
   ws.onmessage = async ev =>{
     const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text());
