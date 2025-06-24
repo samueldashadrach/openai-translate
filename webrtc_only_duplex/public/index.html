@@ -1,0 +1,91 @@
+<!-- public/index.html -->
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tiny WebRTC Voice Chat</title>
+
+<style>
+  body  { font-family: sans-serif; text-align: center; margin-top: 2em; }
+  input { font-size: 1.1em; }
+  button{ font-size: 1.1em; margin-left: .3em; }
+</style>
+
+<h2>WebRTC voice chat (2 participants)</h2>
+<p>
+  Room:
+  <input id="roomInput" placeholder="choose-a-room">
+  <button id="joinBtn" disabled>Join</button>
+</p>
+
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<script>
+/* ---------- UI handling ---------- */
+const roomInput = document.getElementById('roomInput');
+const joinBtn   = document.getElementById('joinBtn');
+const remoteAudio = document.getElementById('remoteAudio');
+
+roomInput.addEventListener('input', () => {
+  joinBtn.disabled = roomInput.value.trim() === '';
+});
+joinBtn.addEventListener('click', joinRoom);
+
+/* ---------- WebRTC setup ---------- */
+const peerConnection = new RTCPeerConnection({
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+});
+
+let websocket;            // will hold the signalling socket
+
+peerConnection.onicecandidate = event => {
+  if (event.candidate && websocket?.readyState === WebSocket.OPEN) {
+    websocket.send(JSON.stringify({ ice: event.candidate }));
+  }
+};
+
+peerConnection.ontrack = event => {
+  // Only audio, so the first track’s stream is enough
+  remoteAudio.srcObject = event.streams[0];
+};
+
+async function joinRoom() {
+  joinBtn.disabled = true;
+
+  // Connect to the Node.js signalling server (same host / different protocol)
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  websocket = new WebSocket(`${wsProtocol}://${location.host}`);
+
+  websocket.addEventListener('open', async () => {
+    const roomName = roomInput.value.trim();
+    websocket.send(JSON.stringify({ join: roomName }));
+
+    // Always grab local microphone as early as possible
+    const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+    // Arbitrarily decide the peer without #callee hash is the offerer
+    if (location.hash !== '#callee') {
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      websocket.send(JSON.stringify({ offer }));
+    }
+  });
+
+  websocket.addEventListener('message', async ({ data }) => {
+    const message = JSON.parse(data);
+
+    if (message.offer) {
+      await peerConnection.setRemoteDescription(message.offer);
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      websocket.send(JSON.stringify({ answer }));
+      location.hash = '#callee';             // mark this tab as the callee
+    }
+    else if (message.answer) {
+      await peerConnection.setRemoteDescription(message.answer);
+    }
+    else if (message.ice) {
+      try { await peerConnection.addIceCandidate(message.ice); } catch (err) { /* ignore dupes */ }
+    }
+  });
+}
+</script>
