@@ -1,12 +1,12 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI-mediated WebRTC chat (simple-autoplay version)</title>
+<title>AI-mediated WebRTC chat (autoplay-simplified)</title>
 
 <style>
   body{font-family:sans-serif;text-align:center;margin-top:2em}
   input,button{font-size:1.05em}  button{margin-left:.3em}
   pre{max-width:90%;margin:1em auto;background:#f3f3f3;
-      padding:.7em;text-align:left}
+      padding:.7em;text-align:left;white-space:pre-wrap}
 </style>
 
 <h2>WebRTC chat – the model speaks only to the remote peer</h2>
@@ -32,16 +32,15 @@ const roomInput   = document.getElementById('roomInput');
 const joinBtn     = document.getElementById('joinBtn');
 const remoteAudio = document.getElementById('remoteAudio');
 
-function updateBtn(){ joinBtn.disabled = roomInput.value.trim() === ''; }
-roomInput.addEventListener('input',  updateBtn);
-roomInput.addEventListener('change', updateBtn);
-updateBtn();
+roomInput.addEventListener('input', ()=>{
+  joinBtn.disabled = roomInput.value.trim() === '';
+});
 joinBtn.onclick = joinRoom;
 
 /* ───────── globals ───────── */
 let pcOai, pcChat, ws, relayCtx, statsTimer;
 
-/* wait until ICE gathering finished (OpenAI has no trickle) */
+/* helper: wait until iceGatheringState === "complete" (OpenAI → no trickle) */
 const waitIce = pc => new Promise(res=>{
   if(pc.iceGatheringState === 'complete') return res();
   pc.addEventListener('icegatheringstatechange', function h(){
@@ -76,7 +75,7 @@ async function connectToOpenAI(micTrack){
     const modelStream = streams[0];
     log('<< modelStream', modelStream.id);
 
-    /* convert remote → local via shared AudioContext */
+    /* turn the *remote* track into a *local* one via the shared AudioContext */
     const src = relayCtx.createMediaStreamSource(modelStream);
     const dst = relayCtx.createMediaStreamDestination();
     src.connect(dst);
@@ -110,8 +109,15 @@ function buildChatPC(firstTrack){
   pcChat = new RTCPeerConnection({
     iceServers:[{urls:'stun:stun.l.google.com:19302'}]
   });
-  pcChat.addTrack(firstTrack);
+  const sender = pcChat.addTrack(firstTrack);
   log('pcChat addTrack', firstTrack.id);
+
+  /* enable Opus-DTX so bandwidth drops to almost zero during silence */
+  try{
+    const p = sender.getParameters();
+    (p.encodings||[]).forEach(e => e.dtx = 'enabled'); // Chrome/Edge
+    sender.setParameters(p);
+  }catch{}
 
   pcChat.onicecandidate = ({candidate})=>{
     if(candidate && ws?.readyState === 1)
@@ -120,8 +126,9 @@ function buildChatPC(firstTrack){
 
   pcChat.ontrack = ({track, streams})=>{
     log('>> ontrack', track.id);
-    remoteAudio.srcObject = streams[0];   // audio element already “playing”
-    remoteAudio.muted = false;            // un-mute once real media arrives
+    remoteAudio.srcObject = streams[0];   // swap in the real stream
+    remoteAudio.muted = false;            // un-mute
+    remoteAudio.play().catch(e=>log('play() failed', e.name)); // second call!
   };
 
   clearInterval(statsTimer);
@@ -157,24 +164,23 @@ async function joinRoom(){
   }
   const micTrack = localStream.getAudioTracks()[0];
 
-  /* 2. create / resume shared AudioContext */
+  /* 2. shared AudioContext */
   relayCtx = new (window.AudioContext||window.webkitAudioContext)();
   if(relayCtx.state === 'suspended') await relayCtx.resume();
   log('AudioContext state:', relayCtx.state);
 
-  /* 3. prime the <audio> element once – this single user-gesture is enough
-        for autoplay on every modern browser */
-  remoteAudio.muted     = true;             // muted ⇒ autoplay allowed
-  remoteAudio.srcObject = new MediaStream(); // empty stream is OK
-  remoteAudio.play().catch(()=>{});          // fire-and-forget
+  /* 3. prime the <audio> element while we still have a user gesture */
+  remoteAudio.muted     = true;               // muted ⇒ autoplay allowed
+  remoteAudio.srcObject = new MediaStream();  // dummy stream
+  remoteAudio.play().catch(()=>{});           // fire-and-forget
 
   /* 4. kick off OpenAI PC & signalling in parallel */
   connectToOpenAI(micTrack).catch(console.error);
 
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss':'ws'}://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onopen = ()=>{
     ws.send(JSON.stringify({join: roomInput.value.trim()}));
-    negotiateChat();            // might be ignored if pcChat not built yet
+    negotiateChat();                          // ok if pcChat not ready yet
   };
   ws.onmessage = async ev =>{
     const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text());
