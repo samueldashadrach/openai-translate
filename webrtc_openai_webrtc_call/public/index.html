@@ -1,15 +1,17 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI-mediated WebRTC chat (audio-relay fixed)</title>
+<title>AI-mediated WebRTC chat (events + audio fixed)</title>
 
 <style>
   body{font-family:sans-serif;text-align:center;margin-top:2em}
   input,button{font-size:1.05em} button{margin-left:.3em}
-  #clickToUnmute{position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);
-                 background:#000d;color:#fff;padding:.6em 1.2em;border-radius:9999px;
-                 cursor:pointer;z-index:1000}
+  #clickToUnmute{position:fixed;bottom:1.5rem;left:50%;
+                 transform:translateX(-50%);background:#000d;color:#fff;
+                 padding:.6em 1.2em;border-radius:9999px;cursor:pointer;
+                 z-index:1000}
   #clickToUnmute[hidden]{display:none}
-  pre{max-width:90%;margin:1em auto;background:#f3f3f3;padding:.7em;text-align:left}
+  pre{max-width:90%;margin:1em auto;background:#f3f3f3;
+      padding:.7em;text-align:left}
 </style>
 
 <h2>WebRTC chat – model’s voice only for the remote peer</h2>
@@ -24,16 +26,14 @@
 <pre id="log"></pre>
 
 <script>
-/* ------------ tiny logger ------------ */
+/* ---------- tiny logger ---------- */
 const logEl=document.getElementById('log');
-const log=(...a)=>{console.log('[DBG]',...a);
-                   logEl.textContent+=a.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ')+'\n';};
+function log(...a){
+  const t=a.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ');
+  console.log('[DBG]',...a); logEl.textContent+=t+'\n';
+}
 
-/* ------------ globals ------------ */
-let pcOai,pcChat,ws,statsTimer;
-let relayCtx;                        // single AudioContext kept running
-
-/* ------------ UI ------------ */
+/* ---------- UI ---------- */
 const roomInput   =document.getElementById('roomInput');
 const joinBtn     =document.getElementById('joinBtn');
 const remoteAudio =document.getElementById('remoteAudio');
@@ -43,9 +43,16 @@ roomInput.oninput=()=>joinBtn.disabled=roomInput.value.trim()==='';
 joinBtn.onclick  =joinRoom;
 unmuteBadge.onclick=()=>{remoteAudio.muted=false;remoteAudio.play();unmuteBadge.hidden=true;};
 
+/* ---------- globals ---------- */
+let pcOai,pcChat,ws,statsTimer,relayCtx;
+
 /* helper: wait for ICE complete */
-const waitIce=(pc)=>new Promise(r=>pc.iceGatheringState==='complete'?r():
-  pc.addEventListener('icegatheringstatechange',function h(){if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',h);r();}}));
+const waitIce=pc=>new Promise(r=>{
+  if(pc.iceGatheringState==='complete') return r();
+  pc.addEventListener('icegatheringstatechange', function h(){
+    if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',h);r();}
+  });
+});
 
 /* ---------- OpenAI connection ---------- */
 async function connectToOpenAI(micTrack){
@@ -55,17 +62,26 @@ async function connectToOpenAI(micTrack){
 
   pcOai=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
   pcOai.addTrack(micTrack);
+  log('pcOai created, mic added', micTrack.id);
 
-  /* relay model → chat */
+  /* data-channel for realtime events (restored) */
+  const dc=pcOai.createDataChannel('oai-events');
+  dc.onopen   =()=>log('oai-events DC open');
+  dc.onmessage=ev=>{
+    try{log('oai-event',JSON.parse(ev.data));}
+    catch{log('oai-raw',ev.data);}
+  };
+
+  /* when model speaks */
   pcOai.ontrack=({streams})=>{
     const modelStream=streams[0];
     log('<< modelStream',modelStream.id);
 
-    /* convert *remote* track → *local* with the already-running context */
+    /* remote → local through running AudioContext */
     const src = relayCtx.createMediaStreamSource(modelStream);
-    const dest= relayCtx.createMediaStreamDestination();
-    src.connect(dest);
-    const localTrack=dest.stream.getAudioTracks()[0];
+    const dst = relayCtx.createMediaStreamDestination();
+    src.connect(dst);
+    const localTrack=dst.stream.getAudioTracks()[0];
 
     if(!pcChat){buildChatPC(localTrack); if(ws?.readyState===1) negotiateChat();}
     else{
@@ -79,30 +95,37 @@ async function connectToOpenAI(micTrack){
 
   const answer=await fetch(
     'https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03',
-    {method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/sdp'},
+    {method:'POST',
+     headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/sdp'},
      body:pcOai.localDescription.sdp}).then(r=>r.text());
   await pcOai.setRemoteDescription({type:'answer',sdp:answer});
   log('OpenAI SDP done – waiting for media');
 }
 
-/* ---------- browser ↔ browser ---------- */
+/* ---------- peer-to-peer chat ---------- */
 function buildChatPC(firstTrack){
   pcChat=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
   pcChat.addTrack(firstTrack);
-  pcChat.onicecandidate=({candidate})=>candidate&&ws?.send(JSON.stringify({ice:candidate}));
+  log('pcChat addTrack', firstTrack.id);
+
+  pcChat.onicecandidate=({candidate})=>{
+    if(candidate && ws?.readyState===1) ws.send(JSON.stringify({ice:candidate}));
+  };
+
   pcChat.ontrack=({track,streams})=>{
     log('>> ontrack',track.id);
     remoteAudio.srcObject=streams[0];
     remoteAudio.muted=false;
-    const p=remoteAudio.play();
-    if(p?.catch) p.catch(e=>{log('autoplay blocked');unmuteBadge.hidden=false;});
+    remoteAudio.play().catch(e=>{log('autoplay blocked',e.name);unmuteBadge.hidden=false;});
   };
 
   clearInterval(statsTimer);
-  statsTimer=setInterval(async()=>{
+  statsTimer=setInterval(async ()=>{
     const s=await pcChat.getStats();let inB=0,outB=0;
-    s.forEach(r=>{if(r.type==='inbound-rtp'&&r.kind==='audio')inB+=r.bytesReceived;
-                  if(r.type==='outbound-rtp'&&r.kind==='audio')outB+=r.bytesSent;});
+    s.forEach(r=>{
+      if(r.type==='inbound-rtp' && r.kind==='audio') inB += r.bytesReceived;
+      if(r.type==='outbound-rtp'&& r.kind==='audio') outB += r.bytesSent;
+    });
     log('RTP bytes ▲',outB,' ▼',inB);
   },3000);
 }
@@ -112,17 +135,16 @@ async function negotiateChat(){
   ws.send(JSON.stringify({offer:pcChat.localDescription}));
 }
 
-/* ---------- entry point ---------- */
+/* ---------- entry ---------- */
 async function joinRoom(){
-  joinBtn.disabled=true;
-  log('joinRoom pressed');
+  joinBtn.disabled=true; log('joinRoom pressed');
 
-  /* prime audio element + create & resume AudioContext while click counts */
-  remoteAudio.muted=true;
-  try{remoteAudio.play();}catch{}
+  /* keep AudioContext alive from user gesture */
   relayCtx=new (window.AudioContext||window.webkitAudioContext)();
-  await relayCtx.resume();           // now context is running ✅
-  log('AudioContext resumed');
+  await relayCtx.resume(); log('AudioContext resumed');
+
+  /* prime audio element */
+  remoteAudio.muted=true; try{remoteAudio.play();}catch{}
 
   /* mic */
   let localStream;
@@ -134,7 +156,7 @@ async function joinRoom(){
 
   /* signalling WS */
   ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
-  ws.onopen=()=>{ws.send(JSON.stringify({join:roomInput.value.trim()})); negotiateChat();};
+  ws.onopen =()=>{ws.send(JSON.stringify({join:roomInput.value.trim()})); negotiateChat();};
   ws.onmessage=async ev=>{
     const msg=JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text());
     if(msg.offer){
@@ -143,7 +165,9 @@ async function joinRoom(){
       ws.send(JSON.stringify({answer:pcChat.localDescription}));
     }else if(msg.answer){
       await pcChat.setRemoteDescription(msg.answer);
-    }else if(msg.ice){try{await pcChat.addIceCandidate(msg.ice);}catch{}}
+    }else if(msg.ice){
+      try{await pcChat.addIceCandidate(msg.ice);}catch{}
+    }
   };
 }
 </script>
