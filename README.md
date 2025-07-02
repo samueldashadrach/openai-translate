@@ -1,6 +1,25 @@
-2025-06-24
+2025-07-02
 
 # openai-translate
+
+#### current state of project
+
+for mac, rogue amoeba loopback jugaad works. for iphone, currently trying to code a nodejs webapp that runs on ios safari.
+
+previous stuff
+ - webrtc_call is working. connects alice and bob to each other.
+ - webrtc_single is working I think? connects alice to openai realtime API.
+
+webrtc_openai_webrtc_call is not working yet. connects alice to openai, connects alice to bob, sends alice's input to openai and openai's output to bob. (also do the same on bob's side.)
+
+one older commit works for the first message but stops working after that
+
+potential issues
+ - handling openai webrtc events. (alice to bob call has no custom events)
+ - browser autoplay issues.
+ - ???
+
+#### misc notes
 
 rogue amoeba loopback solution does not work on iphone, only mac, figuring out alternative solution for iphone
 
@@ -27,17 +46,9 @@ no
  - audiobus, apematrix etc - does not work, because regular video call don't expose themselves as an endpoint for this app to hook
    - o3 says android does not support piping audio from an app to a video call app either
 
-
-
-
-
-
-
-
-
 ---
 
-This project no longer necessary.
+This project no longer necessary for PC.
 
 Figured out much easier solution.
 
