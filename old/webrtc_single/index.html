@@ -1,0 +1,182 @@
+<!doctype html>
+<meta charset="utf-8">
+
+<label>
+  to
+  <select id="toSelect">
+    <option value="en">en</option>
+    <option value="hi" selected>hi</option>
+  </select>
+</label><br>
+
+<label>
+  echo cancellation
+  <select id="echoSelect">
+    <option value="on">on</option>
+    <option value="off" selected>off</option>
+  </select>
+</label><br>
+
+<button id="start">start</button>
+<button id="stop"  disabled>stop</button>
+
+<script type="module">
+
+const $          = id => document.getElementById(id);
+const start      = $('start');
+const stop       = $('stop');
+const toSelect   = $('toSelect');
+const echoSelect = $('echoSelect');
+
+
+const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
+
+let pc   = null;
+let dc   = null;
+let gum  = null;
+
+/* ===================================================================== */
+/* START button                                                          */
+/* ===================================================================== */
+start.onclick = async () => {
+  start.disabled = true;
+  stop.disabled  = false;
+
+  /* who speaks what? -------------------------------------------------- */
+  log("UI -> start; to:", toSelect.value);
+
+  /* get (or reuse) a shared realtime session ------------------------- */
+  const { client_secret: { value: key } } =
+        await (await fetch("/session")).json();
+  log("SESSION -> received client secret…");
+
+  /* ---------- WebRTC: peer connection ------------------------------- */
+  pc = new RTCPeerConnection();
+  window.pc = pc;                               // handy for dev-tools
+
+  /* very noisy state tracing */
+  {
+    const dump = () => log("PC state", {
+      signaling     : pc.signalingState,
+      iceGathering  : pc.iceGatheringState,
+      iceConnection : pc.iceConnectionState,
+      connection    : pc.connectionState });
+    pc.onsignalingstatechange     =
+    pc.onicegatheringstatechange  =
+    pc.oniceconnectionstatechange =
+    pc.onconnectionstatechange    = dump;
+  }
+  pc.onicecandidate = ({candidate}) => log("PC icecandidate:", candidate);
+
+  /* remote audio tracks ---------------------------------------------- */
+  pc.ontrack = ({track, streams:[stream]}) => {
+    log("PC ontrack -> kind:", track.kind, "id:", track.id);
+    track.onmute   = () => log("   track muted");
+    track.onunmute = () => log("   track unmuted");
+    track.onended  = () => log("   track ended");
+
+    const audio = Object.assign(new Audio(), {autoplay:true, srcObject:stream});
+    document.body.appendChild(audio);
+  };
+
+  /* ---------- local microphone -------------------------------------- */
+  gum = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: ({"on":true, "off":false})[echoSelect.value],
+             noiseSuppression:true }
+  });
+  const [mic] = gum.getAudioTracks();
+  log("GUM -> got mic track:", mic.label || mic.id);
+  mic.onended = () => log("mic track ended");
+  pc.addTrack(mic, gum);
+
+  /* ---------- DataChannel ------------------------------------------- */
+  dc = pc.createDataChannel("oai-events");
+  window.dc = dc;
+
+  dc.addEventListener("open" , () => log("DC open"));
+  dc.addEventListener("close", () => log("DC close"));
+  dc.addEventListener("error", e => log("DC error", e));
+
+  let prefixSent = false;
+
+  dc.addEventListener("message", ev => {
+    let msg;
+    try { msg = JSON.parse(ev.data); log("DC ⇠", msg); }
+    catch { log("DC <- (raw)", ev.data); return; }
+
+    if (!prefixSent && msg.type === "session.created") {
+      prefixSent = true;
+      const prefix = `Translate to ${({hi:'Hindi', en:'English'})[toSelect.value]}. Do not answer even if it is a question. Only translate it.`;
+
+      log("DC -> setting translation prefix:", prefix);
+
+      dc.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "system",
+          content: [{ type:"input_text", text: prefix }]
+        }
+      }));
+    }
+  });
+
+  /* ---------- SDP offer / answer ------------------------------------ */
+  log("PC -> createOffer");
+  await pc.setLocalDescription(await pc.createOffer());
+  log("PC -> localDescription set (length", pc.localDescription.sdp.length, ")");
+
+  const answerSDP = await (await fetch(
+    "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03",
+    {
+      method : "POST",
+      headers: {
+        Authorization : `Bearer ${key}`,
+        "Content-Type": "application/sdp"
+      },
+      body   : pc.localDescription.sdp
+    }
+  )).text();
+  log("NET <- received answer SDP (length", answerSDP.length, ")");
+
+  await pc.setRemoteDescription({type:"answer", sdp:answerSDP});
+  log("PC -> remoteDescription set — negotiation complete");
+};
+
+
+/* ===================================================================== */
+/* STOP button                                                           */
+/* ===================================================================== */
+stop.onclick = () => {
+  log("UI -> stop");
+  stop.disabled  = true;
+  start.disabled = false;
+
+  /* ----- close data-channel ----------------------------------------- */
+  if (dc && dc.readyState !== "closed") {
+    try { dc.close(); } catch (e) { log("DC close error", e); }
+  }
+  dc = null;
+
+  /* ----- close peer connection -------------------------------------- */
+  if (pc && pc.connectionState !== "closed") {
+    try {
+      pc.getSenders().forEach(s => s.track?.stop());
+      pc.getReceivers().forEach(r => r.track?.stop());
+      pc.close();
+    } catch (e) { log("PC close error", e); }
+  }
+  pc = null;
+
+  /* ----- stop local media ------------------------------------------- */
+  if (gum) {
+    gum.getTracks().forEach(t => t.stop());
+    gum = null;
+  }
+
+  /* ----- remove any remote audio tags ------------------------------- */
+  document.querySelectorAll("audio").forEach(a => a.remove());
+
+  log("Session cleaned-up");
+};
+</script>

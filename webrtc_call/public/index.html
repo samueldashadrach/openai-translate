@@ -1,0 +1,107 @@
+<!-- tested, working!!! -->
+
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tiny WebRTC Voice Chat</title>
+
+<style>
+  body  { font-family: sans-serif; text-align: center; margin-top: 2em; }
+  input,button{ font-size: 1.1em; }
+  button{ margin-left:.3em; }
+</style>
+
+<h2>WebRTC voice chat (2 participants)</h2>
+<p>
+  Room:
+  <input id="roomInput" placeholder="choose-a-room">
+  <button id="joinBtn" disabled>Join</button>
+</p>
+
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<script>
+/* ---------- UI ---------- */
+const roomInput   = document.getElementById('roomInput');
+const joinBtn     = document.getElementById('joinBtn');
+const remoteAudio = document.getElementById('remoteAudio');
+
+roomInput.addEventListener('input', () =>
+  joinBtn.disabled = roomInput.value.trim() === ''
+);
+joinBtn.addEventListener('click', joinRoom);
+
+/* ---------- WebRTC ---------- */
+const pc = new RTCPeerConnection({
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+});
+
+let ws;                         // signalling socket
+
+pc.onicecandidate = ({candidate}) => {
+  if (candidate && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ ice: candidate }));
+  }
+};
+
+pc.ontrack = ({streams}) => {              // incoming audio
+  remoteAudio.srcObject = streams[0];
+};
+
+async function joinRoom() {
+  joinBtn.disabled = true;
+
+  /* 1. Microphone permission */
+  let localStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  } catch (err) {
+    alert('Need microphone access to continue.');
+    joinBtn.disabled = false;
+    return;
+  }
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+  /* 2. Open WebSocket on /ws (nginx will forward it) */
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.addEventListener('open', async () => {
+    ws.send(JSON.stringify({ join: roomInput.value.trim() }));
+
+    if (location.hash !== '#callee') {      // we are offerer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ offer }));
+    }
+  });
+
+  ws.addEventListener('message', async ev => {
+    let data = ev.data;
+
+    /* Safari / some browsers could deliver a Blob for binary frames */
+    if (typeof data !== 'string') {
+      if (data instanceof Blob) {
+        data = await data.text();
+      } else {
+        return;               // unknown format – ignore
+      }
+    }
+
+    let msg;
+    try { msg = JSON.parse(data); }
+    catch { return; }
+
+    if (msg.offer) {
+      await pc.setRemoteDescription(msg.offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ answer }));
+      location.hash = '#callee';
+    } else if (msg.answer) {
+      await pc.setRemoteDescription(msg.answer);
+    } else if (msg.ice) {
+      try { await pc.addIceCandidate(msg.ice); } catch(_) {}
+    }
+  });
+}
+</script>

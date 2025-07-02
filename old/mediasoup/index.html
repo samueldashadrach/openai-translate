@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8">
+<select id="who"><option>alice</option><option>bob</option></select>
+<button id="go">join</button><script type="module">
+import io from "https://cdn.jsdelivr.net/npm/socket.io-client/+esm"
+import * as ms from "https://cdn.jsdelivr.net/npm/mediasoup-client/+esm"
+
+const s = io(), btn=document.getElementById('go')
+let device, sendT, recvT
+
+btn.onclick = async ()=>{
+  const who = document.getElementById('who').value
+  s.emit('join', who)
+}
+
+s.on('routerRtpCaps', async caps=>{
+  device = new ms.Device(); await device.load({ routerRtpCapabilities:caps })
+  s.emit('rtpCaps', device.rtpCapabilities)
+})
+
+s.on('transportCreated', async data=>{
+  sendT = device.createSendTransport(data)
+  recvT = device.createRecvTransport(data)
+  sendT.on('connect', ({dtlsParameters}, cb)=> s.emit('transport-connect', dtlsParameters), ()=>{})
+  recvT.on('connect', ({dtlsParameters}, cb)=> s.emit('transport-connect', dtlsParameters), ()=>{})
+  const stream = await navigator.mediaDevices.getUserMedia({ audio:true })
+  const track = stream.getAudioTracks()[0]
+  await sendT.produce({ track, codec:{ mimeType:'audio/opus', clockRate:48000 } })
+})
+
+s.on('consume', async ({ id, kind, params })=>{
+  const c = await recvT.consume({ id, producerId:id, kind, rtpParameters:params })
+  const el = new Audio(); el.srcObject = new MediaStream([c.track]); el.play()
+})
+</script>
