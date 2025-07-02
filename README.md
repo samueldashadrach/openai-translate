@@ -2,6 +2,7 @@
 
 # openai-translate
 
+
 #### current state of project
 
 for mac, rogue amoeba loopback jugaad works. for iphone, currently trying to code a nodejs webapp that runs on ios safari.
